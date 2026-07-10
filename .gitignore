@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build and test output
+dist/
+coverage/
+.vite/
+
+# Environment and local state
+.env
+.env.*
+!.env.example
+*.local
+*.log
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Local audio fixtures and exports
+fixtures/private/
+exports/
+*.wav.tmp

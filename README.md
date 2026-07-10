@@ -1,0 +1,58 @@
+# WebAudioKit
+
+WebAudioKit 是一个本地优先、非破坏式的浏览器音频分析工作台。音频默认只在当前浏览器中解码、播放、分析和导出，不上传到服务器。
+
+## 当前能力
+
+- 拖拽或批量导入浏览器可解码的音频，WAV 为基线格式
+- 采样点精确的播放、暂停、停止、跳转、选区循环、音量和倍速
+- 多分辨率双声道波形、选区、缩放和平移
+- 统一 Hann/Hamming/Blackman 窗与 dBFS 标定的 FFT/STFT
+- Worker 驱动的实时频谱、二维声谱预览和 Three.js FFT 3D 曲面/线框/瀑布视图
+- 全文件或选区 WAV 导出：PCM16、PCM24、Float32、可选峰值归一化
+- CSV/JSON 分析数据导出
+- IndexedDB 保存分析参数、选区和最近工作区状态
+- WebGL2 不可用时保留播放、波形和二维分析能力
+
+## 开发
+
+环境要求：Node.js 24+、npm 11+。
+
+```bash
+npm ci
+npm run dev
+```
+
+质量检查：
+
+```bash
+npm run check
+```
+
+单独命令包括：
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+## 工程结构
+
+```text
+src/audio/          FFT、STFT、窗函数、播放引擎、导入与 WAV 编码
+src/workers/        分析、峰值和导出 Worker 及版本化 Client 协议
+src/components/     波形、频谱、声谱、3D、播放与参数界面
+src/state/          可序列化的 IndexedDB 项目状态
+src/visualization/  色板、坐标与格式化工具
+```
+
+完整产品范围见 [PRD](docs/PRD.md)，架构和数学口径见[技术设计](docs/TECHNICAL_DESIGN.md)。贡献前请阅读 [AGENTS.md](AGENTS.md)、[CONTRIBUTING.md](CONTRIBUTING.md) 和 [Git 规范](docs/GIT_CONVENTIONS.md)。
+
+## 已知边界
+
+- MVP 使用 `decodeAudioData` 完整解码，超长音频仍受浏览器内存限制。
+- 非 WAV 输入能力取决于当前浏览器与操作系统解码器。
+- 音频导出只保证 WAV；压缩编码不在当前版本范围内。
+- 3D 引擎按需加载，WebGL2 不可用时自动降级。

@@ -1,0 +1,266 @@
+import { describe, expect, it } from 'vitest'
+
+import type { ImportedAudioMetadata } from '../audio/importAudio'
+import { DEFAULT_ANALYSIS_CONFIG } from '../workspaceTypes'
+import {
+  PROJECT_STORE_SCHEMA_VERSION,
+  createProjectStore,
+} from './projectStore'
+
+const ACTIVE_ASSET: ImportedAudioMetadata = {
+  name: 'tone.wav',
+  extension: 'wav',
+  mimeType: 'audio/wav',
+  sizeBytes: 512,
+  lastModified: 123,
+  fingerprint: 'a'.repeat(64),
+  durationSeconds: 0.25,
+  sampleRate: 48_000,
+  numberOfChannels: 2,
+  lengthSamples: 12_000,
+  pcmBytes: 96_000,
+}
+
+describe('ProjectStore', () => {
+  it('saves a schema-v1 serializable snapshot in memory when IndexedDB is unavailable', async () => {
+    const store = createProjectStore({
+      indexedDB: null,
+      now: () => 1_000,
+    })
+
+    const saved = await store.save({
+      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+      activeAsset: ACTIVE_ASSET,
+      selection: { start: 100, end: 200 },
+      playheadSample: 150,
+    })
+
+    expect(store.persistenceMode).toBe('memory')
+    expect(saved).toEqual({
+      schemaVersion: PROJECT_STORE_SCHEMA_VERSION,
+      updatedAt: 1_000,
+      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+      activeAsset: ACTIVE_ASSET,
+      selection: { start: 100, end: 200 },
+      playheadSample: 150,
+    })
+    await expect(store.load()).resolves.toEqual(saved)
+  })
+
+  it('whitelists metadata fields and never persists File or AudioBuffer values', async () => {
+    const runtimeAsset = {
+      ...ACTIVE_ASSET,
+      file: new File([Uint8Array.of(1)], 'tone.wav'),
+      audioBuffer: { length: 12_000 } as AudioBuffer,
+    }
+    const runtimeConfig: typeof DEFAULT_ANALYSIS_CONFIG & {
+      readonly runtimeWorker: { readonly terminate: () => void }
+    } = {
+      ...DEFAULT_ANALYSIS_CONFIG,
+      runtimeWorker: { terminate: () => undefined },
+    }
+    const store = createProjectStore({ indexedDB: null, now: () => 2_000 })
+
+    const saved = await store.save({
+      analysisConfig: runtimeConfig,
+      activeAsset: runtimeAsset,
+    })
+
+    expect(saved.analysisConfig).toEqual(DEFAULT_ANALYSIS_CONFIG)
+    expect(saved.activeAsset).toEqual(ACTIVE_ASSET)
+    expect(saved.activeAsset).not.toHaveProperty('file')
+    expect(saved.activeAsset).not.toHaveProperty('audioBuffer')
+  })
+
+  it('returns isolated copies and validates sample boundaries before saving', async () => {
+    const store = createProjectStore({ indexedDB: null, now: () => 3_000 })
+    const saved = await store.save({
+      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+      activeAsset: ACTIVE_ASSET,
+      selection: { start: 20, end: 40 },
+    })
+
+    ;(saved.analysisConfig as { fftSize: number }).fftSize = 512
+    ;(saved.selection as { start: number }).start = 0
+
+    await expect(store.load()).resolves.toMatchObject({
+      analysisConfig: { fftSize: 2048 },
+      selection: { start: 20, end: 40 },
+    })
+    await expect(
+      store.save({
+        analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+        activeAsset: ACTIVE_ASSET,
+        selection: { start: 20, end: 12_001 },
+      }),
+    ).rejects.toThrow('sample position exceeds active asset length')
+  })
+
+  it('round-trips and clears the recent workspace through IndexedDB schema v1', async () => {
+    const indexedDB = new FakeIndexedDbFactory()
+    const firstStore = createProjectStore({
+      indexedDB: indexedDB.asFactory(),
+      databaseName: 'project-store-test',
+      now: () => 4_000,
+    })
+    const expected = await firstStore.save({
+      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+      activeAsset: ACTIVE_ASSET,
+      selection: null,
+      playheadSample: 64,
+    })
+    firstStore.close()
+
+    const secondStore = createProjectStore({
+      indexedDB: indexedDB.asFactory(),
+      databaseName: 'project-store-test',
+    })
+    await expect(secondStore.load()).resolves.toEqual(expected)
+    expect(indexedDB.openVersions).toEqual([1, 1])
+
+    await secondStore.clear()
+    secondStore.close()
+    const thirdStore = createProjectStore({
+      indexedDB: indexedDB.asFactory(),
+      databaseName: 'project-store-test',
+    })
+    await expect(thirdStore.load()).resolves.toBeNull()
+  })
+
+  it('keeps the current-session snapshot when IndexedDB throws', async () => {
+    const failingFactory = {
+      open(): IDBOpenDBRequest {
+        throw new DOMException('denied', 'SecurityError')
+      },
+    } as unknown as IDBFactory
+    const store = createProjectStore({
+      indexedDB: failingFactory,
+      now: () => 5_000,
+    })
+
+    const saved = await store.save({
+      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+      playheadSample: 25,
+    })
+
+    expect(store.persistenceMode).toBe('memory')
+    await expect(store.load()).resolves.toEqual(saved)
+  })
+})
+
+class FakeRequest<T> {
+  result!: T
+  error: DOMException | null = null
+  onsuccess: (() => unknown) | null = null
+  onerror: (() => unknown) | null = null
+
+  succeed(result: T): void {
+    this.result = result
+    this.onsuccess?.()
+  }
+}
+
+class FakeOpenRequest extends FakeRequest<IDBDatabase> {
+  onupgradeneeded: (() => unknown) | null = null
+  onblocked: (() => unknown) | null = null
+}
+
+class FakeTransaction {
+  error: DOMException | null = null
+  oncomplete: (() => unknown) | null = null
+  onerror: (() => unknown) | null = null
+  onabort: (() => unknown) | null = null
+
+  constructor(private readonly records: Map<string, unknown>) {}
+
+  objectStore(): IDBObjectStore {
+    const put = (value: unknown, key?: IDBValidKey): IDBRequest<IDBValidKey> =>
+      this.schedule<IDBValidKey>(() => {
+        const normalizedKey = normalizeKey(key)
+        this.records.set(normalizedKey, structuredClone(value))
+        return normalizedKey
+      })
+    const get = (key: IDBValidKey | IDBKeyRange): IDBRequest<unknown> =>
+      this.schedule(() => structuredClone(this.records.get(normalizeKey(key))))
+    const deleteValue = (key: IDBValidKey | IDBKeyRange): IDBRequest<undefined> =>
+      this.schedule(() => {
+        this.records.delete(normalizeKey(key))
+        return undefined
+      })
+
+    return {
+      put,
+      get,
+      delete: deleteValue,
+    } as unknown as IDBObjectStore
+  }
+
+  private schedule<T>(operation: () => T): IDBRequest<T> {
+    const request = new FakeRequest<T>()
+    queueMicrotask(() => {
+      request.succeed(operation())
+      queueMicrotask(() => this.oncomplete?.())
+    })
+    return request as unknown as IDBRequest<T>
+  }
+}
+
+class FakeDatabase {
+  onversionchange: (() => unknown) | null = null
+
+  constructor(private readonly owner: FakeIndexedDbFactory) {}
+
+  get objectStoreNames(): DOMStringList {
+    return {
+      contains: (name: string) =>
+        name === 'projects' && this.owner.hasProjectsStore,
+    } as unknown as DOMStringList
+  }
+
+  createObjectStore(name: string): IDBObjectStore {
+    if (name === 'projects') {
+      this.owner.hasProjectsStore = true
+    }
+    return {} as IDBObjectStore
+  }
+
+  transaction(): IDBTransaction {
+    if (!this.owner.hasProjectsStore) {
+      throw new DOMException('missing store', 'NotFoundError')
+    }
+    return new FakeTransaction(this.owner.records) as unknown as IDBTransaction
+  }
+
+  close(): void {}
+}
+
+class FakeIndexedDbFactory {
+  readonly records = new Map<string, unknown>()
+  readonly openVersions: number[] = []
+  hasProjectsStore = false
+
+  asFactory(): IDBFactory {
+    return this as unknown as IDBFactory
+  }
+
+  open(_name: string, version?: number): IDBOpenDBRequest {
+    this.openVersions.push(version ?? 1)
+    const request = new FakeOpenRequest()
+    queueMicrotask(() => {
+      const needsUpgrade = !this.hasProjectsStore
+      request.result = new FakeDatabase(this) as unknown as IDBDatabase
+      if (needsUpgrade) {
+        request.onupgradeneeded?.()
+      }
+      request.onsuccess?.()
+    })
+    return request as unknown as IDBOpenDBRequest
+  }
+}
+
+function normalizeKey(key: IDBValidKey | IDBKeyRange | undefined): string {
+  if (typeof key !== 'string') {
+    throw new TypeError('Fake IndexedDB only accepts string keys')
+  }
+  return key
+}
