@@ -28,7 +28,7 @@ const EIGHT_CHANNEL_ASSET: ImportedAudioMetadata = {
 }
 
 describe('ProjectStore', () => {
-  it('saves a schema-v2 serializable snapshot in memory when IndexedDB is unavailable', async () => {
+  it('saves a schema-v3 serializable snapshot in memory when IndexedDB is unavailable', async () => {
     const store = createProjectStore({
       indexedDB: null,
       now: () => 1_000,
@@ -40,6 +40,10 @@ describe('ProjectStore', () => {
       selection: { start: 100, end: 200 },
       playheadSample: 150,
       visibleChannels: [1, 0, 1],
+      mutedChannels: [1],
+      soloChannels: [0],
+      channelLayout: 'stereo',
+      spectrumComparison: true,
     })
 
     expect(store.persistenceMode).toBe('memory')
@@ -51,6 +55,10 @@ describe('ProjectStore', () => {
       selection: { start: 100, end: 200 },
       playheadSample: 150,
       visibleChannels: [0, 1],
+      mutedChannels: [1],
+      soloChannels: [0],
+      channelLayout: 'stereo',
+      spectrumComparison: true,
     })
     await expect(store.load()).resolves.toEqual(saved)
   })
@@ -87,16 +95,19 @@ describe('ProjectStore', () => {
       activeAsset: ACTIVE_ASSET,
       selection: { start: 20, end: 40 },
       visibleChannels: [1, 0],
+      mutedChannels: [1],
     })
 
     ;(saved.analysisConfig as { fftSize: number }).fftSize = 512
     ;(saved.selection as { start: number }).start = 0
     saved.visibleChannels?.push(7)
+    saved.mutedChannels?.push(0)
 
     await expect(store.load()).resolves.toMatchObject({
       analysisConfig: { fftSize: 2048 },
       selection: { start: 20, end: 40 },
       visibleChannels: [0, 1],
+      mutedChannels: [1],
     })
     await expect(
       store.save({
@@ -114,10 +125,18 @@ describe('ProjectStore', () => {
       analysisConfig: { ...DEFAULT_ANALYSIS_CONFIG, channel: 7 },
       activeAsset: EIGHT_CHANNEL_ASSET,
       visibleChannels: [7],
+      mutedChannels: [6],
+      soloChannels: [7],
+      channelLayout: '7.1',
     })
 
     expect(saved.analysisConfig.channel).toBe(7)
     expect(saved.visibleChannels).toEqual([7])
+    expect(saved).toMatchObject({
+      mutedChannels: [6],
+      soloChannels: [7],
+      channelLayout: '7.1',
+    })
   })
 
   it('normalizes duplicate visible channels and rejects invalid indexes', async () => {
@@ -149,7 +168,7 @@ describe('ProjectStore', () => {
     }
   })
 
-  it('rejects invalid channel data stored with schema v2', async () => {
+  it('rejects invalid channel and routing data stored with schema v3', async () => {
     const invalidChannelFactory = new FakeIndexedDbFactory()
     invalidChannelFactory.hasProjectsStore = true
     invalidChannelFactory.records.set('recent-workspace', {
@@ -176,6 +195,22 @@ describe('ProjectStore', () => {
       databaseName: 'invalid-visible-channels-test',
     })
     await expect(invalidVisibleStore.load()).resolves.toBeNull()
+
+    const invalidRoutingFactory = new FakeIndexedDbFactory()
+    invalidRoutingFactory.hasProjectsStore = true
+    invalidRoutingFactory.records.set('recent-workspace', {
+      schemaVersion: PROJECT_STORE_SCHEMA_VERSION,
+      updatedAt: 3_850,
+      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+      activeAsset: ACTIVE_ASSET,
+      mutedChannels: [2],
+      channelLayout: '5.1',
+    })
+    const invalidRoutingStore = createProjectStore({
+      indexedDB: invalidRoutingFactory.asFactory(),
+      databaseName: 'invalid-routing-test',
+    })
+    await expect(invalidRoutingStore.load()).resolves.toBeNull()
   })
 
   it.each([
@@ -183,7 +218,7 @@ describe('ProjectStore', () => {
     ['left', 0],
     ['right', 1],
   ] as const)(
-    'migrates schema-v1 channel %s to schema v2',
+    'migrates schema-v1 channel %s to schema v3',
     async (legacyChannel, expectedChannel) => {
       const indexedDB = new FakeIndexedDbFactory()
       indexedDB.hasProjectsStore = true
@@ -212,7 +247,33 @@ describe('ProjectStore', () => {
     },
   )
 
-  it('round-trips and clears multichannel preferences through IndexedDB schema v2', async () => {
+  it('migrates schema-v2 visible channels and writes schema v3', async () => {
+    const indexedDB = new FakeIndexedDbFactory()
+    indexedDB.hasProjectsStore = true
+    indexedDB.records.set('recent-workspace', {
+      schemaVersion: 2,
+      updatedAt: 3_950,
+      analysisConfig: { ...DEFAULT_ANALYSIS_CONFIG, channel: 1 },
+      activeAsset: ACTIVE_ASSET,
+      visibleChannels: [1],
+    })
+    const store = createProjectStore({
+      indexedDB: indexedDB.asFactory(),
+      databaseName: 'schema-v2-migration-test',
+    })
+
+    await expect(store.load()).resolves.toMatchObject({
+      schemaVersion: PROJECT_STORE_SCHEMA_VERSION,
+      analysisConfig: { channel: 1 },
+      visibleChannels: [1],
+    })
+    expect(indexedDB.records.get('recent-workspace')).toMatchObject({
+      schemaVersion: PROJECT_STORE_SCHEMA_VERSION,
+      visibleChannels: [1],
+    })
+  })
+
+  it('round-trips and clears multichannel preferences through IndexedDB schema v3', async () => {
     const indexedDB = new FakeIndexedDbFactory()
     const firstStore = createProjectStore({
       indexedDB: indexedDB.asFactory(),
@@ -225,6 +286,10 @@ describe('ProjectStore', () => {
       selection: null,
       playheadSample: 64,
       visibleChannels: [7, 0, 3, 7],
+      mutedChannels: [4, 1],
+      soloChannels: [7],
+      channelLayout: '7.1',
+      spectrumComparison: true,
     })
     firstStore.close()
 
@@ -234,7 +299,8 @@ describe('ProjectStore', () => {
     })
     await expect(secondStore.load()).resolves.toEqual(expected)
     expect(expected.visibleChannels).toEqual([0, 3, 7])
-    expect(indexedDB.openVersions).toEqual([2, 2])
+    expect(expected.mutedChannels).toEqual([1, 4])
+    expect(indexedDB.openVersions).toEqual([3, 3])
 
     await secondStore.clear()
     secondStore.close()

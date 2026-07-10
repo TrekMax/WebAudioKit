@@ -1,7 +1,7 @@
 # WebAudioKit 技术设计
 
 > 状态：Draft（进入实现前的基线）  
-> 版本：0.1.0  
+> 版本：0.2.0
 > 日期：2026-07-10  
 > 适用范围：首个可交付版本（MVP）及其后续演进
 
@@ -111,6 +111,7 @@ Selection + ExportSpec ─> PCM 分块 ─> Export Worker ─> Blob / FileSystem
 | `AudioContext` | `WebAudioEngine`（应用级单例） | 应用卸载或明确关闭引擎 |
 | `AudioBuffer` | `RuntimeBufferRegistry` | 资源关闭、替换或项目清空 |
 | `AudioBufferSourceNode` | 当前 playback session | 暂停、停止、跳转、结束或新 session 建立 |
+| `ChannelSplitterNode` / 每声道 `GainNode` / `ChannelMergerNode` | 当前活动资源的播放路由 | 资源切换、卸载或引擎释放 |
 | Worker | `WorkerPool` | 应用卸载；任务取消只取消 job，不反复销毁 Worker |
 | Three.js renderer/geometry/material/texture | 对应视图实例 | 视图卸载、数据替换、context lost |
 | Object URL | 导出协调器 | 下载触发后或任务取消时 `URL.revokeObjectURL` |
@@ -199,7 +200,7 @@ interface SpectrogramTileRef {
 - 音频资源的描述信息与 fingerprint；不默认持久化原始文件内容。
 - 选择区、播放位置、循环开关、音量、倍速。
 - FFT 参数、视图范围、色板、3D 相机参数。
-- 当前分析声道和波形可见声道索引；索引统一使用 0-based 存储、`Channel 1…N` 展示。
+- 当前分析声道、波形/对比频谱可见声道索引、每声道 Mute/Solo、语义声道布局和频谱对比开关；索引统一使用 0-based 存储。
 - 峰值金字塔、声谱瓦片、缓存版本与最近访问时间。
 
 仅运行时：
@@ -327,10 +328,16 @@ idle
 ### 7.1 音频图
 
 ```text
-AudioBufferSourceNode ─> GainNode ─> AudioContext.destination
+                                      ┌─> Channel Gain 0 ─┐
+AudioBufferSourceNode ─> Splitter ────┼─> Channel Gain … ─┼─> Merger ─> Master Gain ─> destination
+                                      └─> Channel Gain N ─┘
 ```
 
-`AudioBufferSourceNode` 是一次性节点。每次播放、跳转或倍速变更均创建新 source；停止后立即断开旧节点。MVP 不依赖 `AnalyserNode` 生成权威 FFT，以保证实时与离线频谱使用相同窗函数和幅度标定。
+`AudioBufferSourceNode` 是一次性节点。每次播放、跳转或倍速变更均创建新 source；停止后立即断开旧节点。Splitter/Gain/Merger 路由随活动资源创建并在卸载时成对断开，source 仅接入该稳定路由。Master Gain 继续承载全局音量与静音。
+
+每声道增益的可听规则为 `!muted[c] && (!anySolo || solo[c])`，因此 Mute 优先于 Solo。增益变化使用短线性斜坡。路由保持源索引的身份顺序；5.1 标签顺序为 `FL, FR, FC, LFE, BL, BR`，7.1 作为显式扩展追加 `SL, SR`。语义布局是项目元数据和 UI 标识，不承诺浏览器、操作系统或物理设备提供相同数量的扬声器，也不执行任意硬件端口映射。
+
+播放图不依赖 `AnalyserNode` 生成权威 FFT，以保证实时与离线频谱使用相同窗函数和幅度标定。Mute/Solo 不回写源 PCM，也不进入分析或导出管线。
 
 ### 7.2 播放状态
 
@@ -384,6 +391,7 @@ sample = anchorSample + round(elapsed * sampleRate * playbackRate)
 - `channel` 模式分析任意指定源声道，索引必须满足 `0 <= index < numberOfChannels`。
 - `mix` 模式按声道算术平均：`x[n] = sum(x_c[n]) / C`。该策略可能因反相抵消；UI 必须明确标注“混合”，并允许切换声道。
 - 波形可见声道集合只控制 Canvas 轨道，不进入 FFT 配置，也不得改变 Web Audio 播放图或 WAV 编码输入。
+- 同一集合在多声道实时对比模式下选择叠加曲线；它不等同于播放 Mute/Solo。分析始终读取原始声道 PCM。
 
 ### 8.2 分帧
 
@@ -517,9 +525,10 @@ interface WaveformPyramid {
 
 1. 以当前位置为窗中心计算所需 `[start, start + N)`。
 2. 从 `AudioBuffer` 复制最多 `N * channels` 个样本到可转移的小型 `Float32Array`。
-3. 向 FFT Worker 提交 `fft/frame`，同一视图最多允许一个运行中请求和一个待处理最新请求。
-4. Worker 返回 dBFS frame；迟于新播放位置超过 100 ms 的结果不展示。
-5. 暂停时保留最后一帧；seek 后立即请求新帧。
+3. 单曲线模式向 FFT Worker 提交一个 frame；多声道对比模式在同一 `analyze-channels` job 中提交可见源声道索引，不为每条曲线创建独立 Worker。
+4. Worker 对所选声道复用同一窗位置、FFT 参数、时间轴与频率轴，按请求顺序返回 `{ channelIndex, preview }`；声道间和 STFT batch 间检查取消。
+5. Worker 返回 dBFS frame；generation 已变化或迟于新播放位置的结果不展示。单声道与多声道请求共享同一 analysis generation，模式切换会使前一请求失效。
+6. 暂停时保留最后一帧；seek 后立即请求新帧。
 
 这种“最新值优先”背压会主动丢帧，但不会堆积任务，也不会阻塞播放。后续接入麦克风时再使用 AudioWorklet 将小块 PCM 写入 ring buffer；不得在 AudioWorklet 中做大型 FFT、分配大量对象或访问 IndexedDB。
 
@@ -596,10 +605,10 @@ Three.js 视图使用同一 SpectrogramManifest 的 LOD 数据：
 ### 13.1 消息信封
 
 ```ts
-const WORKER_PROTOCOL_VERSION = 1;
+const WORKER_PROTOCOL_VERSION = 2;
 
 interface WorkerRequest<TType extends string, TPayload> {
-  protocolVersion: 1;
+  protocolVersion: 2;
   requestId: string;
   jobId: JobId;
   type: TType;
@@ -607,12 +616,12 @@ interface WorkerRequest<TType extends string, TPayload> {
 }
 
 type WorkerResponse<T> =
-  | { protocolVersion: 1; requestId: string; jobId: JobId; type: "accepted" }
-  | { protocolVersion: 1; requestId: string; jobId: JobId; type: "progress"; completed: number; total: number }
-  | { protocolVersion: 1; requestId: string; jobId: JobId; type: "result"; payload: T }
-  | { protocolVersion: 1; requestId: string; jobId: JobId; type: "cancelled" }
+  | { protocolVersion: 2; requestId: string; jobId: JobId; type: "accepted" }
+  | { protocolVersion: 2; requestId: string; jobId: JobId; type: "progress"; completed: number; total: number }
+  | { protocolVersion: 2; requestId: string; jobId: JobId; type: "result"; payload: T }
+  | { protocolVersion: 2; requestId: string; jobId: JobId; type: "cancelled" }
   | {
-      protocolVersion: 1;
+      protocolVersion: 2;
       requestId: string;
       jobId: JobId;
       type: "error";
@@ -626,6 +635,7 @@ type WorkerResponse<T> =
 | --- | --- | --- |
 | `peaks/build` | asset、绝对 chunk 起点、channel buffers、base block size | 一个或多个 peak level chunk |
 | `fft/frame` | sampleRate、FFT config、窗口 PCM | `Float32Array` dBFS bins |
+| `analyze-channels` | 同步窗口 PCM、源声道索引数组、共享 FFT config | 有序 `{ channelIndex, preview }[]` |
 | `stft/tile` | firstFrame、frameCount、绝对范围 PCM、FFT config | `Uint8Array`/`Float32Array` tile |
 | `lod/build` | tile refs 或矩阵、目标 time/frequency size、聚合策略 | 3D LOD 矩阵 |
 | `wav/encode-chunk` | format、channels、sample range、PCM chunk、dither seed | WAV data chunk/统计 |
@@ -686,7 +696,7 @@ time_seconds,frame_index,frequency_hz,bin_index,magnitude_dbfs
 | `spectrogramTiles` | fingerprint + configHash + tileIndex | 量化 tile、尺寸、lastAccessed |
 | `cacheIndex` | cacheKey | sizeBytes、kind、lastAccessed、version |
 
-当前 recent-workspace schema 为 v2，使用 `"mix" | number` 保存分析声道，并保存去重、升序的 `visibleChannels`。读取 v1 时将 `left/right` 迁移为 `0/1`，随后回写 v2；越界索引在重新关联源文件、获知实际声道数后回退到 `mix` 或默认可见集合。
+当前 recent-workspace schema 为 v3，使用 `"mix" | number` 保存分析声道，并保存去重、升序的 `visibleChannels`、`mutedChannels`、`soloChannels`，以及兼容当前声道数的 `channelLayout` 和全局 `spectrumComparison`。读取 v1 时将 `left/right` 迁移为 `0/1`，读取 v2 时保留分析与可见声道，随后统一回写 v3。重新关联源文件后再次校验所有索引和布局；不兼容设置回退到安全默认值。
 
 ### 15.2 策略
 

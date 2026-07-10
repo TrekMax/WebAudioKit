@@ -9,9 +9,20 @@ import {
   unitToFrequency,
 } from '../visualization/plotUtils'
 import { spectrumCss } from '../visualization/colorMap'
+import {
+  findSpectrumReference,
+  isRenderableSpectrum,
+  sampleSpectrumDb,
+  sampleSpectrumSeries,
+  type SpectrumComparisonSeries,
+} from './spectrumSeries'
+
+export type { SpectrumComparisonSeries } from './spectrumSeries'
 
 interface SpectrumCanvasProps {
   result: StftPreviewResult | null
+  comparisonSeries?: readonly SpectrumComparisonSeries[]
+  comparisonEnabled?: boolean
   currentTime: number
   minDb: number
   maxDb: number
@@ -23,11 +34,14 @@ interface HoverPoint {
   x: number
   y: number
   frequency: number
-  db: number
 }
+
+const EMPTY_COMPARISON_SERIES: readonly SpectrumComparisonSeries[] = []
 
 export function SpectrumCanvas({
   result,
+  comparisonSeries = EMPTY_COMPARISON_SERIES,
+  comparisonEnabled = false,
   currentTime,
   minDb,
   maxDb,
@@ -38,10 +52,15 @@ export function SpectrumCanvas({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const size = useElementSize(hostRef)
   const [hover, setHover] = useState<HoverPoint | null>(null)
+  const comparisonReference = useMemo(
+    () => comparisonEnabled ? findSpectrumReference(comparisonSeries) : null,
+    [comparisonEnabled, comparisonSeries],
+  )
+  const activeResult = comparisonEnabled ? comparisonReference : result
   const frameIndex = useMemo(() => {
-    if (!result) return 0
-    return nearestFrameIndex(result, currentTime)
-  }, [currentTime, result])
+    if (!activeResult) return 0
+    return nearestFrameIndex(activeResult, currentTime)
+  }, [activeResult, currentTime])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -76,7 +95,9 @@ export function SpectrumCanvas({
       context.fillText(`${Math.round(db)}`, PLOT_MARGIN.left - 8, y + 3)
     }
 
-    const maxFrequency = result?.frequenciesHz.at(-1) ?? 24_000
+    const maxFrequency = activeResult?.frequenciesHz.at(-1) ??
+      result?.frequenciesHz.at(-1) ??
+      24_000
     const minFrequency = frequencyScale === 'log' ? Math.min(20, maxFrequency) : 0
     for (let index = 0; index <= 5; index += 1) {
       const unit = index / 5
@@ -90,57 +111,98 @@ export function SpectrumCanvas({
       context.fillText(formatFrequency(frequency), x, size.height - 10)
     }
 
-    if (!result || result.frameCount === 0 || result.binCount === 0) {
+    const emptyMessage = comparisonEnabled
+      ? comparisonSeries.length === 0
+        ? '暂无可对比频谱，请显示声道或等待分析完成'
+        : comparisonReference === null
+          ? '所选声道暂无可用频谱数据'
+          : null
+      : !isRenderableSpectrum(result)
+        ? '导入音频后显示当前播放位置的频谱'
+        : null
+
+    if (emptyMessage) {
       context.fillStyle = '#6f7d91'
       context.textAlign = 'center'
       context.font = '12px Inter, system-ui, sans-serif'
       context.fillText(
-        '导入音频后显示当前播放位置的频谱',
+        emptyMessage,
         PLOT_MARGIN.left + plotWidth / 2,
         PLOT_MARGIN.top + plotHeight / 2,
       )
       return
     }
 
-    const offset = frameIndex * result.binCount
-    const gradient = context.createLinearGradient(0, PLOT_MARGIN.top + plotHeight, 0, PLOT_MARGIN.top)
-    gradient.addColorStop(0, 'rgba(31, 227, 178, 0.04)')
-    gradient.addColorStop(1, 'rgba(31, 227, 178, 0.28)')
-
-    const points: Array<readonly [number, number]> = []
-    for (let bin = 0; bin < result.binCount; bin += 1) {
-      const frequency = result.frequenciesHz[bin] ?? 0
-      if (frequency < minFrequency) continue
-      const db = result.valuesDbfs[offset + bin] ?? minDb
-      const x = PLOT_MARGIN.left +
-        frequencyToUnit(frequency, minFrequency, maxFrequency, frequencyScale) * plotWidth
-      const normalized = Math.max(0, Math.min(1, (db - minDb) / (maxDb - minDb)))
-      const y = PLOT_MARGIN.top + (1 - normalized) * plotHeight
-      points.push([x, y])
+    const collectPoints = (
+      spectrum: StftPreviewResult,
+      spectrumFrameIndex: number,
+    ): Array<readonly [number, number]> => {
+      const offset = spectrumFrameIndex * spectrum.binCount
+      const points: Array<readonly [number, number]> = []
+      for (let bin = 0; bin < spectrum.binCount; bin += 1) {
+        const frequency = spectrum.frequenciesHz[bin] ?? 0
+        if (frequency < minFrequency || frequency > maxFrequency) continue
+        const db = spectrum.valuesDbfs[offset + bin] ?? minDb
+        const x = PLOT_MARGIN.left +
+          frequencyToUnit(frequency, minFrequency, maxFrequency, frequencyScale) * plotWidth
+        const normalized = Math.max(0, Math.min(1, (db - minDb) / (maxDb - minDb)))
+        const y = PLOT_MARGIN.top + (1 - normalized) * plotHeight
+        points.push([x, y])
+      }
+      return points
     }
 
-    if (points.length > 1) {
-      context.beginPath()
+    const strokePoints = (
+      points: readonly (readonly [number, number])[],
+      color: string,
+      shadowColor: string | null,
+    ) => {
       const first = points[0]
-      if (!first) return
-      context.moveTo(first[0], PLOT_MARGIN.top + plotHeight)
-      context.lineTo(first[0], first[1])
-      for (const point of points.slice(1)) context.lineTo(point[0], point[1])
-      const last = points.at(-1)
-      if (last) context.lineTo(last[0], PLOT_MARGIN.top + plotHeight)
-      context.closePath()
-      context.fillStyle = gradient
-      context.fill()
-
+      if (!first || points.length < 2) return
       context.beginPath()
       context.moveTo(first[0], first[1])
       for (const point of points.slice(1)) context.lineTo(point[0], point[1])
-      context.strokeStyle = '#20dfb1'
-      context.shadowColor = 'rgba(32, 223, 177, 0.5)'
-      context.shadowBlur = 8
+      context.strokeStyle = color
+      context.shadowColor = shadowColor ?? 'transparent'
+      context.shadowBlur = shadowColor ? 8 : 0
       context.lineWidth = 1.5
       context.stroke()
       context.shadowBlur = 0
+    }
+
+    if (comparisonEnabled) {
+      for (const series of comparisonSeries) {
+        if (!isRenderableSpectrum(series.result)) continue
+        const seriesFrameIndex = nearestFrameIndex(series.result, currentTime)
+        strokePoints(
+          collectPoints(series.result, seriesFrameIndex),
+          series.color,
+          null,
+        )
+      }
+    } else if (isRenderableSpectrum(result)) {
+      const points = collectPoints(result, frameIndex)
+      const first = points[0]
+      if (first && points.length > 1) {
+        const gradient = context.createLinearGradient(
+          0,
+          PLOT_MARGIN.top + plotHeight,
+          0,
+          PLOT_MARGIN.top,
+        )
+        gradient.addColorStop(0, 'rgba(31, 227, 178, 0.04)')
+        gradient.addColorStop(1, 'rgba(31, 227, 178, 0.28)')
+        context.beginPath()
+        context.moveTo(first[0], PLOT_MARGIN.top + plotHeight)
+        context.lineTo(first[0], first[1])
+        for (const point of points.slice(1)) context.lineTo(point[0], point[1])
+        const last = points.at(-1)
+        if (last) context.lineTo(last[0], PLOT_MARGIN.top + plotHeight)
+        context.closePath()
+        context.fillStyle = gradient
+        context.fill()
+        strokePoints(points, '#20dfb1', 'rgba(32, 223, 177, 0.5)')
+      }
     }
 
     context.fillStyle = '#8290a3'
@@ -148,14 +210,27 @@ export function SpectrumCanvas({
     context.fillText('dBFS', 8, 12)
     context.textAlign = 'right'
     context.fillText(
-      `${frozen ? 'FROZEN · ' : ''}${(result.timesSeconds[frameIndex] ?? 0).toFixed(3)} s`,
+      `${frozen ? 'FROZEN · ' : ''}${(activeResult?.timesSeconds[frameIndex] ?? 0).toFixed(3)} s`,
       PLOT_MARGIN.left + plotWidth,
       12,
     )
-  }, [frameIndex, frequencyScale, frozen, maxDb, minDb, result, size])
+  }, [
+    activeResult,
+    comparisonEnabled,
+    comparisonReference,
+    comparisonSeries,
+    currentTime,
+    frameIndex,
+    frequencyScale,
+    frozen,
+    maxDb,
+    minDb,
+    result,
+    size,
+  ])
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (!result) return setHover(null)
+    if (!isRenderableSpectrum(activeResult)) return setHover(null)
     const rect = event.currentTarget.getBoundingClientRect()
     const plotWidth = rect.width - PLOT_MARGIN.left - PLOT_MARGIN.right
     const plotHeight = rect.height - PLOT_MARGIN.top - PLOT_MARGIN.bottom
@@ -164,28 +239,71 @@ export function SpectrumCanvas({
     if (localX < 0 || localY < 0 || localX > plotWidth || localY > plotHeight) {
       return setHover(null)
     }
-    const maxFrequency = result.frequenciesHz.at(-1) ?? result.sampleRate / 2
+    const maxFrequency = activeResult.frequenciesHz.at(-1) ?? activeResult.sampleRate / 2
     const minFrequency = frequencyScale === 'log' ? Math.min(20, maxFrequency) : 0
     const frequency = unitToFrequency(localX / plotWidth, minFrequency, maxFrequency, frequencyScale)
-    const bin = Math.max(0, Math.min(result.binCount - 1, Math.round(frequency * result.fftSize / result.sampleRate)))
-    const db = result.valuesDbfs[frameIndex * result.binCount + bin] ?? minDb
-    setHover({ x: localX + PLOT_MARGIN.left, y: localY + PLOT_MARGIN.top, frequency, db })
+    setHover({ x: localX + PLOT_MARGIN.left, y: localY + PLOT_MARGIN.top, frequency })
   }
+
+  const comparisonHoverSamples = hover && comparisonEnabled
+    ? sampleSpectrumSeries(comparisonSeries, currentTime, hover.frequency, minDb)
+    : []
+  const singleHoverDb = hover && !comparisonEnabled && isRenderableSpectrum(result)
+    ? sampleSpectrumDb(result, currentTime, hover.frequency, minDb)
+    : null
 
   return (
     <div ref={hostRef} className="plot-host">
       <canvas
         ref={canvasRef}
-        aria-label="实时频谱图"
+        aria-label={comparisonEnabled
+          ? `实时多声道频谱对比图，${comparisonSeries.length} 个声道`
+          : '实时频谱图'}
         onPointerMove={handlePointerMove}
         onPointerLeave={() => setHover(null)}
       />
-      {hover && (
+      {comparisonEnabled && comparisonSeries.length > 0 && (
+        <div className="spectrum-comparison-legend" aria-label="对比声道图例" role="list">
+          {comparisonSeries.map((series, index) => (
+            <div
+              className="spectrum-comparison-legend-item"
+              key={`${series.channelIndex}-${index}`}
+              role="listitem"
+              title={series.label}
+            >
+              <span
+                aria-hidden="true"
+                className="spectrum-comparison-swatch"
+                style={{ backgroundColor: series.color, color: series.color }}
+              />
+              <span>{series.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {hover && (singleHoverDb !== null || comparisonHoverSamples.length > 0) && (
         <div className="plot-tooltip" style={{ left: hover.x + 12, top: hover.y + 10 }}>
           <strong>{formatFrequency(hover.frequency)} Hz</strong>
-          <span style={{ color: spectrumCss(hover.db, minDb, maxDb) }}>
-            {hover.db.toFixed(1)} dBFS
-          </span>
+          {comparisonEnabled
+            ? comparisonHoverSamples.map((sample) => (
+                <span
+                  className="spectrum-comparison-tooltip-row"
+                  key={sample.channelIndex}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="spectrum-comparison-swatch"
+                    style={{ backgroundColor: sample.color, color: sample.color }}
+                  />
+                  <span className="spectrum-comparison-tooltip-label">{sample.label}</span>
+                  <span style={{ color: sample.color }}>{sample.db.toFixed(1)} dBFS</span>
+                </span>
+              ))
+            : singleHoverDb !== null && (
+                <span style={{ color: spectrumCss(singleHoverDb, minDb, maxDb) }}>
+                  {singleHoverDb.toFixed(1)} dBFS
+                </span>
+              )}
         </div>
       )}
     </div>

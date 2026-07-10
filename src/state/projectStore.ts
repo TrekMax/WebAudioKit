@@ -1,10 +1,14 @@
 import type { ImportedAudioMetadata } from '../audio/importAudio'
+import {
+  isChannelLayoutCompatible,
+  type ChannelLayoutPreset,
+} from '../audio/channelLayout'
 import type {
   SampleSelection,
   WorkspaceAnalysisConfig,
 } from '../workspaceTypes'
 
-export const PROJECT_STORE_SCHEMA_VERSION = 2 as const
+export const PROJECT_STORE_SCHEMA_VERSION = 3 as const
 export const PROJECT_STORE_DATABASE_NAME = 'webaudio-kit'
 
 const PROJECTS_OBJECT_STORE = 'projects'
@@ -16,6 +20,10 @@ export interface RecentWorkspacePreferences {
   readonly selection?: SampleSelection | null
   readonly playheadSample?: number
   readonly visibleChannels?: number[]
+  readonly mutedChannels?: number[]
+  readonly soloChannels?: number[]
+  readonly channelLayout?: ChannelLayoutPreset
+  readonly spectrumComparison?: boolean
 }
 
 export interface StoredRecentWorkspace extends RecentWorkspacePreferences {
@@ -103,7 +111,10 @@ export class ProjectStore {
       }
 
       this.memorySnapshot = cloneStoredSnapshot(snapshot)
-      if (isRecord(storedValue) && storedValue.schemaVersion === 1) {
+      if (
+        isRecord(storedValue)
+        && storedValue.schemaVersion !== PROJECT_STORE_SCHEMA_VERSION
+      ) {
         await putValue(database, snapshot)
       }
       return cloneStoredSnapshot(snapshot)
@@ -231,6 +242,34 @@ function createStoredSnapshot(
     Object.assign(snapshot, { visibleChannels })
   }
 
+  for (const [key, value] of [
+    ['mutedChannels', preferences.mutedChannels],
+    ['soloChannels', preferences.soloChannels],
+  ] as const) {
+    if (value === undefined) continue
+    const channels = parseVisibleChannels(value)
+    if (!channels || !areChannelsWithinActiveAsset(channels, snapshot.activeAsset)) {
+      throw new RangeError(`${key} must contain valid active-asset channel indexes`)
+    }
+    Object.assign(snapshot, { [key]: channels })
+  }
+
+  if (preferences.channelLayout !== undefined) {
+    const channelLayout = parseChannelLayout(preferences.channelLayout)
+    if (
+      !channelLayout
+      || !isLayoutWithinActiveAsset(channelLayout, snapshot.activeAsset)
+    ) throw new RangeError('channelLayout is incompatible with the active asset')
+    Object.assign(snapshot, { channelLayout })
+  }
+
+  if (preferences.spectrumComparison !== undefined) {
+    if (typeof preferences.spectrumComparison !== 'boolean') {
+      throw new RangeError('spectrumComparison must be boolean')
+    }
+    Object.assign(snapshot, { spectrumComparison: preferences.spectrumComparison })
+  }
+
   return snapshot
 }
 
@@ -239,7 +278,7 @@ function parseStoredSnapshot(value: unknown): StoredRecentWorkspace | null {
     return null
   }
   if (
-    !(value.schemaVersion === 1 ||
+    !(value.schemaVersion === 1 || value.schemaVersion === 2 ||
       value.schemaVersion === PROJECT_STORE_SCHEMA_VERSION) ||
     !Number.isSafeInteger(value.updatedAt) ||
     (value.updatedAt as number) < 0
@@ -297,7 +336,7 @@ function parseStoredSnapshot(value: unknown): StoredRecentWorkspace | null {
   }
 
   if (
-    value.schemaVersion === PROJECT_STORE_SCHEMA_VERSION &&
+    (value.schemaVersion === 2 || value.schemaVersion === PROJECT_STORE_SCHEMA_VERSION) &&
     'visibleChannels' in value
   ) {
     const visibleChannels = parseVisibleChannels(value.visibleChannels)
@@ -305,6 +344,31 @@ function parseStoredSnapshot(value: unknown): StoredRecentWorkspace | null {
       return null
     }
     Object.assign(snapshot, { visibleChannels })
+  }
+
+  if (value.schemaVersion === PROJECT_STORE_SCHEMA_VERSION) {
+    for (const key of ['mutedChannels', 'soloChannels'] as const) {
+      if (!(key in value)) continue
+      const channels = parseVisibleChannels(value[key])
+      if (!channels || !areChannelsWithinActiveAsset(channels, snapshot.activeAsset)) {
+        return null
+      }
+      Object.assign(snapshot, { [key]: channels })
+    }
+
+    if ('channelLayout' in value) {
+      const channelLayout = parseChannelLayout(value.channelLayout)
+      if (
+        !channelLayout
+        || !isLayoutWithinActiveAsset(channelLayout, snapshot.activeAsset)
+      ) return null
+      Object.assign(snapshot, { channelLayout })
+    }
+
+    if ('spectrumComparison' in value) {
+      if (typeof value.spectrumComparison !== 'boolean') return null
+      Object.assign(snapshot, { spectrumComparison: value.spectrumComparison })
+    }
   }
 
   return snapshot
@@ -390,6 +454,25 @@ function parseVisibleChannels(value: unknown): number[] | null {
   }
 
   return [...new Set(channels)].sort((left, right) => left - right)
+}
+
+function parseChannelLayout(value: unknown): ChannelLayoutPreset | null {
+  const layouts = ['discrete', 'mono', 'stereo', 'quad', '5.1', '7.1'] as const
+  return includesValue(layouts, value) ? value : null
+}
+
+function areChannelsWithinActiveAsset(
+  channels: readonly number[],
+  activeAsset: ImportedAudioMetadata | null | undefined,
+): boolean {
+  return !activeAsset || channels.every((channel) => channel < activeAsset.numberOfChannels)
+}
+
+function isLayoutWithinActiveAsset(
+  layout: ChannelLayoutPreset,
+  activeAsset: ImportedAudioMetadata | null | undefined,
+): boolean {
+  return !activeAsset || isChannelLayoutCompatible(layout, activeAsset.numberOfChannels)
 }
 
 function parseActiveAsset(value: unknown): ImportedAudioMetadata | null {
@@ -491,6 +574,18 @@ function cloneStoredSnapshot(
       : {}),
     ...('visibleChannels' in snapshot
       ? { visibleChannels: [...(snapshot.visibleChannels ?? [])] }
+      : {}),
+    ...('mutedChannels' in snapshot
+      ? { mutedChannels: [...(snapshot.mutedChannels ?? [])] }
+      : {}),
+    ...('soloChannels' in snapshot
+      ? { soloChannels: [...(snapshot.soloChannels ?? [])] }
+      : {}),
+    ...('channelLayout' in snapshot
+      ? { channelLayout: snapshot.channelLayout }
+      : {}),
+    ...('spectrumComparison' in snapshot
+      ? { spectrumComparison: snapshot.spectrumComparison }
       : {}),
   }
 }

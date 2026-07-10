@@ -5,6 +5,7 @@ import {
   DEFAULT_STFT_PREVIEW_FRAME_LIMIT,
   amplitudeToDbfs,
   analyzeSpectrumFrame,
+  computeChannelStftPreviews,
   computeStftPreview,
   mixChannels,
 } from './analysis'
@@ -172,6 +173,78 @@ describe('channel mixing and STFT previews', () => {
     expect(result.channelMode).toEqual({ kind: 'channel', index: 7 })
     expect(indexOfMaximum(result.valuesDbfs)).toBe(64)
     expect(result.valuesDbfs[64]).toBeCloseTo(amplitudeToDbfs(0.5), 3)
+  })
+
+  it('analyzes selected source channels in request order with shared axes', () => {
+    const fftSize = 512
+    const channels = Array.from(
+      { length: 4 },
+      (_, channelIndex) => sineWave(fftSize, 8 * (channelIndex + 1), 0.5),
+    )
+
+    const result = computeChannelStftPreviews(
+      channels,
+      [3, 0, 2],
+      {
+        sampleRate: 48_000,
+        fftSize,
+        hopSize: fftSize,
+        frameCount: 1,
+        minDb: -120,
+        maxDb: 0,
+      },
+    )
+
+    expect(result.results.map(({ channelIndex }) => channelIndex)).toEqual([
+      3, 0, 2,
+    ])
+    expect(result.results.map(({ preview }) => (
+      indexOfMaximum(preview.valuesDbfs)
+    ))).toEqual([32, 8, 24])
+    expect(result.results[1]?.preview.frameIndices).toBe(
+      result.results[0]?.preview.frameIndices,
+    )
+    expect(result.results[2]?.preview.timesSeconds).toBe(
+      result.results[0]?.preview.timesSeconds,
+    )
+    expect(result.results[2]?.preview.frequenciesHz).toBe(
+      result.results[0]?.preview.frequenciesHz,
+    )
+  })
+
+  it('validates multi-channel selections and cancels between channels', () => {
+    const channels = [new Float32Array(8), new Float32Array(8)]
+
+    expect(() => computeChannelStftPreviews(
+      channels,
+      [],
+      { sampleRate: 8, fftSize: 8, frameCount: 1 },
+    )).toThrow(RangeError)
+    expect(() => computeChannelStftPreviews(
+      channels,
+      [1, 1],
+      { sampleRate: 8, fftSize: 8, frameCount: 1 },
+    )).toThrow(RangeError)
+    expect(() => computeChannelStftPreviews(
+      channels,
+      [2],
+      { sampleRate: 8, fftSize: 8, frameCount: 1 },
+    )).toThrow(RangeError)
+
+    let completed = 0
+    expect(() => computeChannelStftPreviews(
+      channels,
+      [0, 1],
+      { sampleRate: 8, fftSize: 8, frameCount: 1 },
+      {
+        shouldCancel: () => completed === 1,
+        onProgress: (nextCompleted, total) => {
+          completed = nextCompleted
+          expect(total).toBe(2)
+        },
+      },
+    )).toThrow(AnalysisCancelledError)
+    expect(completed).toBe(1)
   })
 
   it('bounds an implicit whole-range preview while retaining source frame indices', () => {

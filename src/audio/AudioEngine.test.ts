@@ -4,29 +4,83 @@ import { AudioEngine } from './AudioEngine'
 
 class FakeAudioParam {
   value = 1
+  readonly calls: Array<
+    | { type: 'cancel'; time: number }
+    | { type: 'hold'; time: number }
+    | { type: 'set'; value: number; time: number }
+    | { type: 'ramp'; value: number; time: number }
+  > = []
 
-  cancelScheduledValues(): FakeAudioParam {
+  cancelScheduledValues(time: number): FakeAudioParam {
+    this.calls.push({ type: 'cancel', time })
     return this
   }
 
-  setValueAtTime(value: number): FakeAudioParam {
-    this.value = value
+  cancelAndHoldAtTime(time: number): FakeAudioParam {
+    this.calls.push({ type: 'hold', time })
     return this
   }
 
-  linearRampToValueAtTime(value: number): FakeAudioParam {
+  setValueAtTime(value: number, time: number): FakeAudioParam {
     this.value = value
+    this.calls.push({ type: 'set', value, time })
+    return this
+  }
+
+  linearRampToValueAtTime(value: number, time: number): FakeAudioParam {
+    this.value = value
+    this.calls.push({ type: 'ramp', value, time })
     return this
   }
 }
 
+interface FakeConnection {
+  readonly destination: unknown
+  readonly output: number
+  readonly input: number
+}
+
 class FakeGainNode {
   readonly gain = new FakeAudioParam()
+  readonly connections: FakeConnection[] = []
   connected = false
   disconnected = false
 
-  connect(): FakeGainNode {
+  connect(destination: unknown, output = 0, input = 0): FakeGainNode {
     this.connected = true
+    this.connections.push({ destination, output, input })
+    return this
+  }
+
+  disconnect(): void {
+    this.disconnected = true
+  }
+}
+
+class FakeChannelSplitterNode {
+  readonly connections: FakeConnection[] = []
+  disconnected = false
+
+  constructor(readonly numberOfOutputs: number) {}
+
+  connect(destination: unknown, output = 0, input = 0): FakeChannelSplitterNode {
+    this.connections.push({ destination, output, input })
+    return this
+  }
+
+  disconnect(): void {
+    this.disconnected = true
+  }
+}
+
+class FakeChannelMergerNode {
+  readonly connections: FakeConnection[] = []
+  disconnected = false
+
+  constructor(readonly numberOfInputs: number) {}
+
+  connect(destination: unknown, output = 0, input = 0): FakeChannelMergerNode {
+    this.connections.push({ destination, output, input })
     return this
   }
 
@@ -40,12 +94,14 @@ class FakeBufferSourceNode {
   readonly playbackRate = new FakeAudioParam()
   onended: (() => void) | null = null
   readonly starts: Array<{ when: number; offset: number; duration: number | undefined }> = []
+  readonly connections: FakeConnection[] = []
   connected = false
   disconnected = false
   stopped = false
 
-  connect(): FakeBufferSourceNode {
+  connect(destination: unknown, output = 0, input = 0): FakeBufferSourceNode {
     this.connected = true
+    this.connections.push({ destination, output, input })
     return this
   }
 
@@ -70,7 +126,9 @@ class FakeAudioContext {
   currentTime = 0
   state: AudioContextState
   readonly destination = {} as AudioDestinationNode
-  readonly gain = new FakeGainNode()
+  readonly gains: FakeGainNode[] = []
+  readonly splitters: FakeChannelSplitterNode[] = []
+  readonly mergers: FakeChannelMergerNode[] = []
   readonly sources: FakeBufferSourceNode[] = []
   resumeError: Error | null = null
   closed = false
@@ -80,8 +138,30 @@ class FakeAudioContext {
     this.state = state
   }
 
+  get gain(): FakeGainNode {
+    const masterGain = this.gains[0]
+    if (!masterGain) {
+      throw new Error('Master gain has not been created')
+    }
+    return masterGain
+  }
+
   createGain(): GainNode {
-    return this.gain as unknown as GainNode
+    const gain = new FakeGainNode()
+    this.gains.push(gain)
+    return gain as unknown as GainNode
+  }
+
+  createChannelSplitter(numberOfOutputs = 6): ChannelSplitterNode {
+    const splitter = new FakeChannelSplitterNode(numberOfOutputs)
+    this.splitters.push(splitter)
+    return splitter as unknown as ChannelSplitterNode
+  }
+
+  createChannelMerger(numberOfInputs = 6): ChannelMergerNode {
+    const merger = new FakeChannelMergerNode(numberOfInputs)
+    this.mergers.push(merger)
+    return merger as unknown as ChannelMergerNode
   }
 
   createBufferSource(): AudioBufferSourceNode {
@@ -167,6 +247,137 @@ describe('AudioEngine', () => {
       durationSeconds: 1,
       sampleRate: 1_000,
       numberOfChannels: 2,
+      channelMuted: [false, false],
+      channelSolo: [false, false],
+    })
+  })
+
+  it('routes every source channel through an independent gain and rebuilds on load', async () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+
+    engine.load('asset-a', createAudioBuffer(1_000, 1_000, 3))
+
+    const firstSplitter = context.splitters[0]
+    const firstMerger = context.mergers[0]
+    const firstChannelGains = context.gains.slice(1, 4)
+    expect(firstSplitter?.numberOfOutputs).toBe(3)
+    expect(firstMerger?.numberOfInputs).toBe(3)
+    expect(firstSplitter?.connections).toEqual(
+      firstChannelGains.map((gain, channelIndex) => ({
+        destination: gain,
+        output: channelIndex,
+        input: 0,
+      })),
+    )
+    firstChannelGains.forEach((gain, channelIndex) => {
+      expect(gain.connections).toEqual([
+        { destination: firstMerger, output: 0, input: channelIndex },
+      ])
+    })
+    expect(firstMerger?.connections).toEqual([
+      { destination: context.gain, output: 0, input: 0 },
+    ])
+
+    await engine.play()
+    expect(context.sources[0]?.connections).toEqual([
+      { destination: firstSplitter, output: 0, input: 0 },
+    ])
+
+    engine.setChannelMuted(1, true)
+    engine.setChannelSolo(2, true)
+    const nextSnapshot = engine.load('asset-b', createAudioBuffer(1_000, 1_000, 2))
+
+    expect(context.sources[0]).toMatchObject({ stopped: true, disconnected: true, buffer: null })
+    expect(firstSplitter?.disconnected).toBe(true)
+    expect(firstMerger?.disconnected).toBe(true)
+    expect(firstChannelGains.every((gain) => gain.disconnected)).toBe(true)
+    expect(context.splitters[1]?.numberOfOutputs).toBe(2)
+    expect(context.mergers[1]?.numberOfInputs).toBe(2)
+    expect(nextSnapshot).toMatchObject({
+      assetId: 'asset-b',
+      numberOfChannels: 2,
+      channelMuted: [false, false],
+      channelSolo: [false, false],
+    })
+  })
+
+  it('applies deterministic per-channel mute and solo precedence', () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+    const initial = engine.load(createAudioBuffer(1_000, 1_000, 4))
+    const channelGains = context.gains.slice(1, 5)
+
+    expect(initial.channelMuted).toEqual([false, false, false, false])
+    expect(initial.channelSolo).toEqual([false, false, false, false])
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([1, 1, 1, 1])
+
+    expect(engine.setChannelMuted(1, true)).toMatchObject({
+      channelMuted: [false, true, false, false],
+      channelSolo: [false, false, false, false],
+    })
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([1, 0, 1, 1])
+
+    engine.setChannelSolo(2, true)
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([0, 0, 1, 0])
+
+    engine.setChannelSolo(1, true)
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([0, 0, 1, 0])
+
+    engine.setChannelSolo(2, false)
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([0, 0, 0, 0])
+
+    engine.setChannelMuted(1, false)
+    expect(engine.snapshot()).toMatchObject({
+      channelMuted: [false, false, false, false],
+      channelSolo: [false, true, false, false],
+    })
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([0, 1, 0, 0])
+
+    engine.setChannelSolo(1, false)
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([1, 1, 1, 1])
+  })
+
+  it('ramps channel changes without restarting playback or touching the master gain', async () => {
+    const context = new FakeAudioContext()
+    const engine = new AudioEngine({
+      context: context as unknown as AudioContext,
+      gainRampSeconds: 0.02,
+    })
+    engine.load(createAudioBuffer(1_000, 1_000, 2))
+    await engine.play()
+
+    const source = context.sources[0]
+    const channelGains = context.gains.slice(1, 3)
+    const masterCallCount = context.gain.gain.calls.length
+    channelGains.forEach((gain) => {
+      gain.gain.calls.length = 0
+    })
+    context.currentTime = 0.25
+
+    engine.setChannelSolo(0, true)
+
+    expect(context.sources).toHaveLength(1)
+    expect(source).toMatchObject({ stopped: false, disconnected: false })
+    expect(context.gain.gain.calls).toHaveLength(masterCallCount)
+    expect(channelGains[0]?.gain.calls).toContainEqual({ type: 'hold', time: 0.25 })
+    expect(channelGains[1]?.gain.calls).toContainEqual({ type: 'hold', time: 0.25 })
+    expect(channelGains[0]?.gain.calls).toContainEqual({ type: 'ramp', value: 1, time: 0.27 })
+    expect(channelGains[1]?.gain.calls).toContainEqual({ type: 'ramp', value: 0, time: 0.27 })
+  })
+
+  it('returns channel state copies that cannot mutate engine state', () => {
+    const engine = createEngine(new FakeAudioContext())
+    const snapshot = engine.load(createAudioBuffer())
+    const exposedMuted = snapshot.channelMuted as boolean[]
+    const exposedSolo = snapshot.channelSolo as boolean[]
+
+    exposedMuted[0] = true
+    exposedSolo[1] = true
+
+    expect(engine.snapshot()).toMatchObject({
+      channelMuted: [false, false],
+      channelSolo: [false, false],
     })
   })
 
@@ -299,6 +510,9 @@ describe('AudioEngine', () => {
     const context = new FakeAudioContext()
     const engine = createEngine(context)
     engine.load(createAudioBuffer())
+    const splitter = context.splitters[0]
+    const merger = context.mergers[0]
+    const channelGains = context.gains.slice(1, 3)
     await engine.play()
     const staleEnded = context.sources[0]?.onended
 
@@ -310,8 +524,13 @@ describe('AudioEngine', () => {
       assetId: null,
       durationSamples: 0,
       sessionId: null,
+      channelMuted: [],
+      channelSolo: [],
     })
     expect(context.sources[0]).toMatchObject({ stopped: true, disconnected: true, buffer: null })
+    expect(splitter?.disconnected).toBe(true)
+    expect(merger?.disconnected).toBe(true)
+    expect(channelGains.every((gain) => gain.disconnected)).toBe(true)
 
     await engine.dispose()
     expect(context.gain.disconnected).toBe(true)
@@ -341,5 +560,11 @@ describe('AudioEngine', () => {
     expect(() => engine.setSelection({ start: 10, end: 10 })).toThrow(RangeError)
     expect(() => engine.setVolume(1.1)).toThrow(RangeError)
     expect(() => engine.setPlaybackRate(2.1)).toThrow(RangeError)
+    expect(() => engine.setChannelMuted(-1, true)).toThrow(RangeError)
+    expect(() => engine.setChannelMuted(2, true)).toThrow(RangeError)
+    expect(() => engine.setChannelSolo(0.5, true)).toThrow(RangeError)
+
+    engine.unload()
+    expect(() => engine.setChannelSolo(0, true)).toThrow(RangeError)
   })
 })

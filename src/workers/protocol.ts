@@ -1,16 +1,25 @@
 import type {
   AnalysisOptions,
+  ChannelBatchAnalysisOptions,
+  MultiChannelStftPreviewResult,
   StftPreviewResult,
 } from '../audio/analysis'
 import type { WaveformPyramid } from '../audio/peaks'
 
-export const WORKER_PROTOCOL_VERSION = 1 as const
+export const WORKER_PROTOCOL_VERSION = 2 as const
 
 export type WorkerProtocolVersion = typeof WORKER_PROTOCOL_VERSION
 
 export interface AnalyzePayload {
   readonly channels: Float32Array[]
   readonly options: AnalysisOptions
+}
+
+export interface AnalyzeChannelsPayload {
+  readonly channels: Float32Array[]
+  /** Zero-based source channel indices, returned in this order. */
+  readonly channelIndices: number[]
+  readonly options: ChannelBatchAnalysisOptions
 }
 
 export interface BuildPeaksPayload {
@@ -37,11 +46,16 @@ interface WorkerRequestEnvelope<TType extends string, TPayload> {
 }
 
 export type AnalyzeRequest = WorkerRequestEnvelope<'analyze', AnalyzePayload>
+export type AnalyzeChannelsRequest = WorkerRequestEnvelope<
+  'analyze-channels',
+  AnalyzeChannelsPayload
+>
 export type BuildPeaksRequest = WorkerRequestEnvelope<'build-peaks', BuildPeaksPayload>
 export type CancelRequest = WorkerRequestEnvelope<'cancel', CancelPayload>
 
 export type AnalysisWorkerRequest =
   | AnalyzeRequest
+  | AnalyzeChannelsRequest
   | BuildPeaksRequest
   | CancelRequest
 
@@ -76,7 +90,11 @@ export interface ErrorResponse extends WorkerResponseEnvelope<'error'> {
   readonly error: WorkerErrorData
 }
 
-export type AnalysisWorkerResult = StftPreviewResult | WaveformPyramid | CancelResult
+export type AnalysisWorkerResult =
+  | StftPreviewResult
+  | MultiChannelStftPreviewResult
+  | WaveformPyramid
+  | CancelResult
 
 export type AnalysisWorkerResponse<TPayload = AnalysisWorkerResult> =
   | AcceptedResponse

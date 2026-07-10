@@ -2,6 +2,8 @@ import {
   AnalysisCancelledError,
   computeStftPreview,
   type AnalysisRunControl,
+  type ChannelStftPreview,
+  type MultiChannelStftPreviewResult,
   type StftPreviewResult,
 } from '../audio/analysis'
 import {
@@ -13,6 +15,7 @@ import {
   WORKER_PROTOCOL_VERSION,
   type AnalysisWorkerRequest,
   type AnalysisWorkerResponse,
+  type AnalyzeChannelsPayload,
   type AnalyzePayload,
   type BuildPeaksPayload,
   type WorkerErrorData,
@@ -83,6 +86,12 @@ function isRequest(value: unknown): value is AnalysisWorkerRequest {
   switch (value.type) {
     case 'analyze':
       return Array.isArray(value.payload.channels) && isRecord(value.payload.options)
+    case 'analyze-channels':
+      return (
+        Array.isArray(value.payload.channels) &&
+        Array.isArray(value.payload.channelIndices) &&
+        isRecord(value.payload.options)
+      )
     case 'build-peaks':
       return (
         typeof value.payload.assetId === 'string' &&
@@ -99,7 +108,9 @@ function isRequest(value: unknown): value is AnalysisWorkerRequest {
   }
 }
 
-function collectTransferables(result: StftPreviewResult | WaveformPyramid): Transferable[] {
+function collectTransferables(
+  result: StftPreviewResult | MultiChannelStftPreviewResult | WaveformPyramid,
+): Transferable[] {
   const buffers = new Set<ArrayBuffer>()
   const add = (view: ArrayBufferView): void => {
     if (view.buffer instanceof ArrayBuffer) {
@@ -107,11 +118,19 @@ function collectTransferables(result: StftPreviewResult | WaveformPyramid): Tran
     }
   }
 
-  if ('valuesDbfs' in result) {
-    add(result.frameIndices)
-    add(result.timesSeconds)
-    add(result.frequenciesHz)
-    add(result.valuesDbfs)
+  const addPreview = (preview: StftPreviewResult): void => {
+    add(preview.frameIndices)
+    add(preview.timesSeconds)
+    add(preview.frequenciesHz)
+    add(preview.valuesDbfs)
+  }
+
+  if ('results' in result) {
+    for (const { preview } of result.results) {
+      addPreview(preview)
+    }
+  } else if ('valuesDbfs' in result) {
+    addPreview(result)
   } else {
     for (const level of result.levels) {
       for (const channel of level.channels) {
@@ -161,6 +180,48 @@ function assertChannels(channels: unknown): asserts channels is Float32Array[] {
 
   if (!Number.isSafeInteger(totalBytes) || totalBytes > 1024 * 1024 * 1024) {
     throw new RangeError('PCM payload exceeds the worker memory limit')
+  }
+}
+
+function assertChannelIndices(
+  channelIndices: unknown,
+  channelCount: number,
+): asserts channelIndices is number[] {
+  if (!Array.isArray(channelIndices) || channelIndices.length === 0) {
+    throw new RangeError('At least one analysis channel index is required')
+  }
+
+  const uniqueIndices = new Set<number>()
+  for (const channelIndex of channelIndices) {
+    if (
+      !Number.isSafeInteger(channelIndex) ||
+      channelIndex < 0 ||
+      channelIndex >= channelCount
+    ) {
+      throw new RangeError('Selected analysis channel is out of range')
+    }
+    if (uniqueIndices.has(channelIndex)) {
+      throw new RangeError('Analysis channel indices must be unique')
+    }
+    uniqueIndices.add(channelIndex)
+  }
+}
+
+function assertMultiChannelResultSize(
+  preview: StftPreviewResult,
+  channelCount: number,
+): void {
+  const sharedAxisBytes =
+    preview.frameIndices.byteLength +
+    preview.timesSeconds.byteLength +
+    preview.frequenciesHz.byteLength
+  const resultBytes =
+    sharedAxisBytes + preview.valuesDbfs.byteLength * channelCount
+
+  if (!Number.isSafeInteger(resultBytes) || resultBytes > MAX_RESULT_BYTES) {
+    throw new RangeError(
+      'Requested multi-channel STFT result exceeds the worker memory limit',
+    )
   }
 }
 
@@ -270,7 +331,6 @@ export function createAnalysisWorkerRuntime(
     if (!isRecord(payload.options)) {
       throw new TypeError('Analysis options must be an object')
     }
-
     const control: AnalysisRunControl = {
       shouldCancel: () => job.cancelled,
       onProgress: (completed, total) => {
@@ -347,6 +407,76 @@ export function createAnalysisWorkerRuntime(
     return combined
   }
 
+  const runChannelPreviews = async (
+    job: ActiveJob,
+    payload: AnalyzeChannelsPayload,
+    reportProgress: (completed: number, total: number, force?: boolean) => void,
+  ): Promise<MultiChannelStftPreviewResult> => {
+    assertChannels(payload.channels)
+    assertChannelIndices(payload.channelIndices, payload.channels.length)
+    if (!isRecord(payload.options)) {
+      throw new TypeError('Analysis options must be an object')
+    }
+    if (!Number.isSafeInteger(payload.options.frameCount)) {
+      throw new RangeError('Multi-channel analysis requires an explicit frameCount')
+    }
+
+    const results: ChannelStftPreview[] = []
+    let sharedAxes: Pick<
+      StftPreviewResult,
+      'frameIndices' | 'timesSeconds' | 'frequenciesHz'
+    > | undefined
+    reportProgress(0, payload.channelIndices.length, true)
+
+    for (
+      let resultIndex = 0;
+      resultIndex < payload.channelIndices.length;
+      resultIndex += 1
+    ) {
+      throwIfCancelled(job)
+      const channelIndex = payload.channelIndices[resultIndex]
+      if (channelIndex === undefined) {
+        throw new RangeError('Analysis channel index is missing')
+      }
+
+      const computed = await runPreview(
+        job,
+        {
+          channels: payload.channels,
+          options: {
+            ...payload.options,
+            channelMode: { kind: 'channel', index: channelIndex },
+          },
+        },
+        () => undefined,
+      )
+      throwIfCancelled(job)
+
+      if (sharedAxes === undefined) {
+        assertMultiChannelResultSize(computed, payload.channelIndices.length)
+        sharedAxes = {
+          frameIndices: computed.frameIndices,
+          timesSeconds: computed.timesSeconds,
+          frequenciesHz: computed.frequenciesHz,
+        }
+      }
+      const preview = resultIndex === 0
+        ? computed
+        : {
+            ...computed,
+            ...sharedAxes,
+          }
+      results.push({ channelIndex, preview })
+      reportProgress(
+        resultIndex + 1,
+        payload.channelIndices.length,
+        true,
+      )
+    }
+
+    return { results }
+  }
+
   const runPeaks = async (
     job: ActiveJob,
     payload: BuildPeaksPayload,
@@ -396,7 +526,9 @@ export function createAnalysisWorkerRuntime(
       throwIfCancelled(job)
       const result = request.type === 'analyze'
         ? await runPreview(job, request.payload, reportProgress)
-        : await runPeaks(job, request.payload, reportProgress)
+        : request.type === 'analyze-channels'
+          ? await runChannelPreviews(job, request.payload, reportProgress)
+          : await runPeaks(job, request.payload, reportProgress)
       throwIfCancelled(job)
 
       if (!job.terminal) {

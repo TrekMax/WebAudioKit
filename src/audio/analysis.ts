@@ -89,6 +89,26 @@ export interface StftPreviewResult {
   readonly valuesDbfs: Float32Array
 }
 
+/**
+ * Analysis options shared by every source channel in a batch. Batch jobs use
+ * an explicit frame count so the Worker can yield predictably between bounded
+ * chunks instead of entering the implicit whole-range preview path.
+ */
+export type ChannelBatchAnalysisOptions =
+  Omit<AnalysisOptions, 'channelMode' | 'frameCount'>
+  & { readonly frameCount: number }
+
+export interface ChannelStftPreview {
+  /** Zero-based source channel index. */
+  readonly channelIndex: number
+  readonly preview: StftPreviewResult
+}
+
+/** Ordered results for a single multi-channel analysis request. */
+export interface MultiChannelStftPreviewResult {
+  readonly results: readonly ChannelStftPreview[]
+}
+
 export class AnalysisCancelledError extends Error {
   constructor() {
     super('Audio analysis was cancelled')
@@ -217,6 +237,24 @@ function assertChannelMode(
     mode.index >= channelCount
   ) {
     throw new RangeError('Selected analysis channel is out of range')
+  }
+}
+
+function assertChannelIndices(
+  channelIndices: readonly number[],
+  channelCount: number,
+): void {
+  if (channelIndices.length === 0) {
+    throw new RangeError('At least one analysis channel index is required')
+  }
+
+  const uniqueIndices = new Set<number>()
+  for (const channelIndex of channelIndices) {
+    assertChannelMode({ kind: 'channel', index: channelIndex }, channelCount)
+    if (uniqueIndices.has(channelIndex)) {
+      throw new RangeError('Analysis channel indices must be unique')
+    }
+    uniqueIndices.add(channelIndex)
   }
 }
 
@@ -509,4 +547,71 @@ export function computeStftPreview(
     frequenciesHz,
     valuesDbfs,
   }
+}
+
+/**
+ * Computes matching STFT previews for selected source channels. Results retain
+ * request order and share their immutable time/frequency axis buffers.
+ */
+export function computeChannelStftPreviews(
+  channels: readonly Float32Array[],
+  channelIndices: readonly number[],
+  options: ChannelBatchAnalysisOptions,
+  control: AnalysisRunControl = {},
+): MultiChannelStftPreviewResult {
+  assertChannels(channels)
+  assertChannelIndices(channelIndices, channels.length)
+
+  const results: ChannelStftPreview[] = []
+  let sharedAxes: Pick<
+    StftPreviewResult,
+    'frameIndices' | 'timesSeconds' | 'frequenciesHz'
+  > | undefined
+
+  for (
+    let resultIndex = 0;
+    resultIndex < channelIndices.length;
+    resultIndex += 1
+  ) {
+    if (control.shouldCancel?.()) {
+      throw new AnalysisCancelledError()
+    }
+
+    const channelIndex = channelIndices[resultIndex]
+    if (channelIndex === undefined) {
+      throw new RangeError('Analysis channel index is missing')
+    }
+
+    const computed = computeStftPreview(
+      channels,
+      {
+        ...options,
+        channelMode: { kind: 'channel', index: channelIndex },
+      },
+      {
+        shouldCancel: control.shouldCancel,
+        onProgress: (completedFrames, totalFrames) => {
+          control.onProgress?.(
+            resultIndex * totalFrames + completedFrames,
+            channelIndices.length * totalFrames,
+          )
+        },
+      },
+    )
+
+    sharedAxes ??= {
+      frameIndices: computed.frameIndices,
+      timesSeconds: computed.timesSeconds,
+      frequenciesHz: computed.frequenciesHz,
+    }
+    const preview = resultIndex === 0
+      ? computed
+      : {
+          ...computed,
+          ...sharedAxes,
+        }
+    results.push({ channelIndex, preview })
+  }
+
+  return { results }
 }

@@ -11,6 +11,7 @@ import {
   AudioWaveform,
   Box,
   FolderOpen,
+  Layers3,
   Maximize2,
   ScanLine,
   ShieldCheck,
@@ -19,6 +20,12 @@ import {
 } from 'lucide-react'
 import { AudioEngine } from './audio/AudioEngine'
 import {
+  defaultChannelLayout,
+  describeChannelLayout,
+  normalizeChannelLayout,
+  type ChannelLayoutPreset,
+} from './audio/channelLayout'
+import {
   DEFAULT_MAX_DECODED_PCM_BYTES,
   DEFAULT_MAX_ENCODED_AUDIO_BYTES,
   DEFAULT_MAX_ESTIMATED_WORKING_SET_BYTES,
@@ -26,7 +33,7 @@ import {
   type ImportedAudioMetadata,
 } from './audio/importAudio'
 import type { PlaybackSnapshot, SampleRange } from './audio/types'
-import type { StftPreviewResult } from './audio/analysis'
+import type { ChannelStftPreview, StftPreviewResult } from './audio/analysis'
 import { mergeWaveformPyramids, type WaveformPyramid } from './audio/peaks'
 import { AnalysisWorkerClient } from './workers/AnalysisWorkerClient'
 import { ExportWorkerClient } from './workers/ExportWorkerClient'
@@ -71,6 +78,9 @@ interface RuntimeAsset {
   selection: SampleSelection | null
   positionSample: number
   visibleChannels: number[]
+  mutedChannels: number[]
+  soloChannels: number[]
+  channelLayout: ChannelLayoutPreset
 }
 
 interface AnalysisClients {
@@ -92,11 +102,24 @@ const EMPTY_PLAYBACK: PlaybackSnapshot = {
   loop: false,
   volume: 1,
   muted: false,
+  channelMuted: [],
+  channelSolo: [],
   playbackRate: 1,
   contextState: 'suspended',
   sessionId: null,
   errorMessage: null,
 }
+
+const CHANNEL_SPECTRUM_COLORS = [
+  '#20dfb1',
+  '#64a9ff',
+  '#ffb35c',
+  '#ff6f76',
+  '#b08cff',
+  '#52d6e8',
+  '#d7df63',
+  '#f08bd8',
+] as const
 
 function createId(prefix: string): string {
   return `${prefix}-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
@@ -169,6 +192,24 @@ function normalizeConfigChannel(
   return { ...config, channel: 'mix' }
 }
 
+function normalizeChannelSet(
+  channels: readonly number[] | undefined,
+  numberOfChannels: number,
+): number[] {
+  return [...new Set(channels ?? [])]
+    .filter((channel) => Number.isSafeInteger(channel) && channel >= 0 && channel < numberOfChannels)
+    .sort((left, right) => left - right)
+}
+
+function applyPlaybackChannelState(engine: AudioEngine, asset: RuntimeAsset): void {
+  for (const channelIndex of asset.mutedChannels) {
+    engine.setChannelMuted(channelIndex, true)
+  }
+  for (const channelIndex of asset.soloChannels) {
+    engine.setChannelSolo(channelIndex, true)
+  }
+}
+
 function matchesStoredAsset(
   stored: ImportedAudioMetadata | null | undefined,
   imported: ImportedAudioMetadata,
@@ -231,7 +272,9 @@ export function App() {
   const [mode3d, setMode3d] = useState<Fft3DMode>('surface')
   const [quality3d, setQuality3d] = useState<Fft3DQuality>('medium')
   const [realtimeResult, setRealtimeResult] = useState<StftPreviewResult | null>(null)
+  const [realtimeChannelResults, setRealtimeChannelResults] = useState<readonly ChannelStftPreview[]>([])
   const [spectrumFrozen, setSpectrumFrozen] = useState(false)
+  const [spectrumComparison, setSpectrumComparison] = useState(false)
   const [frozenTime, setFrozenTime] = useState(0)
   const [analysisStale, setAnalysisStale] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
@@ -282,7 +325,10 @@ export function App() {
     if (workspaceRestoreAppliedRef.current) return
     workspaceRestoreAppliedRef.current = true
     restoredWorkspaceRef.current = stored
-    if (stored) setConfig(stored.analysisConfig)
+    if (stored) {
+      setConfig(stored.analysisConfig)
+      setSpectrumComparison(stored.spectrumComparison ?? false)
+    }
     setWorkspaceRestored(true)
   }, [])
 
@@ -309,10 +355,21 @@ export function App() {
           ? playback.positionSample
           : (pendingRestore?.playheadSample ?? 0),
         visibleChannels: activeAsset?.visibleChannels ?? pendingRestore?.visibleChannels,
+        mutedChannels: activeAsset?.mutedChannels ?? pendingRestore?.mutedChannels,
+        soloChannels: activeAsset?.soloChannels ?? pendingRestore?.soloChannels,
+        channelLayout: activeAsset?.channelLayout ?? pendingRestore?.channelLayout,
+        spectrumComparison,
       }).catch(() => undefined)
     }, 350)
     return () => window.clearTimeout(timeout)
-  }, [activeAsset, config, playback.positionSample, projectStore, workspaceRestored])
+  }, [
+    activeAsset,
+    config,
+    playback.positionSample,
+    projectStore,
+    spectrumComparison,
+    workspaceRestored,
+  ])
 
   useEffect(() => {
     if (playback.kind !== 'playing') return
@@ -470,7 +527,6 @@ export function App() {
           importConfig,
           imported.audioBuffer.numberOfChannels,
         )
-        setConfig(nextAnalysisConfig)
         const restored = restoredWorkspaceRef.current
         const matchingRestore = restored && matchesStoredAsset(
           restored.activeAsset,
@@ -497,16 +553,34 @@ export function App() {
                 imported.audioBuffer.numberOfChannels,
               )
             : defaultVisibleChannels(imported.audioBuffer.numberOfChannels),
+          mutedChannels: normalizeChannelSet(
+            matchingRestore?.mutedChannels,
+            imported.audioBuffer.numberOfChannels,
+          ),
+          soloChannels: normalizeChannelSet(
+            matchingRestore?.soloChannels,
+            imported.audioBuffer.numberOfChannels,
+          ),
+          channelLayout: matchingRestore
+            ? normalizeChannelLayout(
+                matchingRestore.channelLayout,
+                imported.audioBuffer.numberOfChannels,
+              )
+            : defaultChannelLayout(imported.audioBuffer.numberOfChannels),
         }
-        lastAsset = asset
-        lastAssetExceedsSoftLimit = imported.memory.exceedsSoftLimit
-        setAssets((current) => [...current, asset])
-        setActiveId(asset.id)
         engine.load(asset.id, asset.buffer, {
           positionSample: asset.positionSample,
           selection: asset.selection,
         })
+        applyPlaybackChannelState(engine, asset)
+        clients.realtime.invalidateAnalysis()
+        setConfig(nextAnalysisConfig)
+        lastAsset = asset
+        lastAssetExceedsSoftLimit = imported.memory.exceedsSoftLimit
+        setAssets((current) => [...current, asset])
+        setActiveId(asset.id)
         setRealtimeResult(null)
+        setRealtimeChannelResults([])
         if (imported.memory.exceedsSoftLimit) {
           setStatusMessage(`已导入 ${file.name}；解码 PCM 占用较高，建议缩小分析选区`)
         } else {
@@ -588,32 +662,24 @@ export function App() {
     const next = assets.find((asset) => asset.id === id)
     if (!next) return
     const nextConfig = normalizeConfigChannel(config, next.buffer.numberOfChannels)
-    if (nextConfig !== config) setConfig(nextConfig)
-    if (offlineJobIdRef.current) {
-      clientsRef.current?.offline.cancel(offlineJobIdRef.current)
-      offlineJobIdRef.current = null
-      setAnalyzing(false)
-      setAnalysisProgress(0)
-    }
     if (activeId) {
       setAssets((current) => current.map((asset) => asset.id === activeId
         ? { ...asset, positionSample: playback.positionSample, selection: playback.selection }
         : asset))
     }
     const engine = ensureEngine()
-    engine.load(id, next.buffer, {
-      positionSample: next.positionSample,
-      selection: next.selection,
-    })
-    setActiveId(id)
-    setRealtimeResult(null)
-    setAnalysisStale(next.analysisKey !== analysisKey(nextConfig, next.selection))
-  }, [activeId, assets, config, ensureEngine, playback.positionSample, playback.selection])
-
-  const removeAsset = useCallback((id: string) => {
-    const remaining = assets.filter((asset) => asset.id !== id)
-    setAssets(remaining)
-    if (id !== activeId) return
+    try {
+      engine.load(id, next.buffer, {
+        positionSample: next.positionSample,
+        selection: next.selection,
+      })
+      applyPlaybackChannelState(engine, next)
+    } catch (error) {
+      setErrorMessage(error instanceof Error
+        ? `无法切换音频资源：${error.message}`
+        : '无法切换音频资源')
+      return
+    }
     if (offlineJobIdRef.current) {
       clientsRef.current?.offline.cancel(offlineJobIdRef.current)
       offlineJobIdRef.current = null
@@ -621,23 +687,61 @@ export function App() {
       setAnalysisProgress(0)
     }
     clientsRef.current?.realtime.invalidateAnalysis()
+    if (nextConfig !== config) setConfig(nextConfig)
+    setActiveId(id)
+    setRealtimeResult(null)
+    setRealtimeChannelResults([])
+    setAnalysisStale(next.analysisKey !== analysisKey(nextConfig, next.selection))
+  }, [activeId, assets, config, ensureEngine, playback.positionSample, playback.selection])
+
+  const removeAsset = useCallback((id: string) => {
+    const remaining = assets.filter((asset) => asset.id !== id)
+    if (id !== activeId) {
+      setAssets(remaining)
+      return
+    }
     const engine = ensureEngine()
-    engine.unload()
     const next = remaining[0]
+    const nextConfig = next
+      ? normalizeConfigChannel(config, next.buffer.numberOfChannels)
+      : null
     if (next) {
-      const nextConfig = normalizeConfigChannel(config, next.buffer.numberOfChannels)
+      try {
+        engine.load(next.id, next.buffer, {
+          positionSample: next.positionSample,
+          selection: next.selection,
+        })
+        applyPlaybackChannelState(engine, next)
+      } catch (error) {
+        setErrorMessage(error instanceof Error
+          ? `无法切换到下一资源：${error.message}`
+          : '无法切换到下一资源')
+        return
+      }
+    } else {
+      engine.unload()
+    }
+
+    if (offlineJobIdRef.current) {
+      clientsRef.current?.offline.cancel(offlineJobIdRef.current)
+      offlineJobIdRef.current = null
+      setAnalyzing(false)
+      setAnalysisProgress(0)
+    }
+    clientsRef.current?.realtime.invalidateAnalysis()
+
+    if (next && nextConfig) {
+      setAssets(remaining)
       if (nextConfig !== config) setConfig(nextConfig)
-      engine.load(next.id, next.buffer, {
-        positionSample: next.positionSample,
-        selection: next.selection,
-      })
       setActiveId(next.id)
       setAnalysisStale(next.analysisKey !== analysisKey(nextConfig, next.selection))
     } else {
+      setAssets(remaining)
       setActiveId(null)
-      setRealtimeResult(null)
       setAnalysisStale(false)
     }
+    setRealtimeResult(null)
+    setRealtimeChannelResults([])
   }, [activeId, assets, config, ensureEngine])
 
   const toggleChannelVisibility = useCallback((channelIndex: number) => {
@@ -691,6 +795,42 @@ export function App() {
       : asset))
   }, [activeId])
 
+  const toggleChannelMute = useCallback((channelIndex: number) => {
+    if (!activeAsset) return
+    const muted = !activeAsset.mutedChannels.includes(channelIndex)
+    ensureEngine().setChannelMuted(channelIndex, muted)
+    setAssets((current) => current.map((asset) => asset.id === activeAsset.id
+      ? {
+          ...asset,
+          mutedChannels: muted
+            ? [...asset.mutedChannels, channelIndex].sort((left, right) => left - right)
+            : asset.mutedChannels.filter((index) => index !== channelIndex),
+        }
+      : asset))
+  }, [activeAsset, ensureEngine])
+
+  const toggleChannelSolo = useCallback((channelIndex: number) => {
+    if (!activeAsset) return
+    const solo = !activeAsset.soloChannels.includes(channelIndex)
+    ensureEngine().setChannelSolo(channelIndex, solo)
+    setAssets((current) => current.map((asset) => asset.id === activeAsset.id
+      ? {
+          ...asset,
+          soloChannels: solo
+            ? [...asset.soloChannels, channelIndex].sort((left, right) => left - right)
+            : asset.soloChannels.filter((index) => index !== channelIndex),
+        }
+      : asset))
+  }, [activeAsset, ensureEngine])
+
+  const changeChannelLayout = useCallback((layout: ChannelLayoutPreset) => {
+    if (!activeAsset) return
+    const normalized = normalizeChannelLayout(layout, activeAsset.buffer.numberOfChannels)
+    setAssets((current) => current.map((asset) => asset.id === activeAsset.id
+      ? { ...asset, channelLayout: normalized }
+      : asset))
+  }, [activeAsset])
+
   const updateSelection = useCallback((selection: SampleSelection | null) => {
     if (!activeAsset) return
     if (offlineJobIdRef.current) {
@@ -715,12 +855,18 @@ export function App() {
 
   useEffect(() => {
     if (!activeAsset || spectrumFrozen) return
+    const comparisonChannels = normalizeChannelSet(
+      activeAsset.visibleChannels,
+      activeAsset.buffer.numberOfChannels,
+    )
     const key = JSON.stringify({
       fftSize: config.fftSize,
       window: config.window,
       minDb: config.minDb,
       maxDb: config.maxDb,
       channel: config.channel,
+      spectrumComparison,
+      comparisonChannels,
     })
     const minimumDelta = activeAsset.buffer.sampleRate / 15
     const anchor = realtimeAnchorRef.current
@@ -736,6 +882,12 @@ export function App() {
       key,
     }
 
+    const realtimeClient = ensureClients().realtime
+    if (spectrumComparison && comparisonChannels.length === 0) {
+      realtimeClient.invalidateAnalysis()
+      return
+    }
+
     const fftSize = config.fftSize
     const windowStart = playback.positionSample - Math.floor(fftSize / 2)
     const channels = Array.from({ length: activeAsset.buffer.numberOfChannels }, (_, channel) => {
@@ -749,25 +901,53 @@ export function App() {
       return output
     })
 
-    const job = ensureClients().realtime.startAnalyze({
+    const options = {
+      sampleRate: activeAsset.buffer.sampleRate,
+      fftSize,
+      hopSize: fftSize,
+      window: config.window,
+      minDb: config.minDb,
+      maxDb: config.maxDb,
+      range: { start: 0, end: fftSize },
+      frameCount: 1,
+    } as const
+
+    if (spectrumComparison) {
+      const job = realtimeClient.startAnalyzeChannels({
+        channels,
+        channelIndices: comparisonChannels,
+        options,
+      })
+      void job.result.then(({ results }) => {
+        for (const { preview } of results) {
+          preview.timesSeconds[0] = playback.positionSeconds
+        }
+        setRealtimeChannelResults(results)
+      }).catch(() => undefined)
+      return
+    }
+
+    const job = realtimeClient.startAnalyze({
       channels,
       options: {
-        sampleRate: activeAsset.buffer.sampleRate,
-        fftSize,
-        hopSize: fftSize,
-        window: config.window,
+        ...options,
         channelMode: channelMode(config, activeAsset.buffer.numberOfChannels),
-        minDb: config.minDb,
-        maxDb: config.maxDb,
-        range: { start: 0, end: fftSize },
-        frameCount: 1,
       },
     })
     void job.result.then((result) => {
       result.timesSeconds[0] = playback.positionSeconds
       setRealtimeResult(result)
     }).catch(() => undefined)
-  }, [activeAsset, config, ensureClients, playback.kind, playback.positionSample, playback.positionSeconds, spectrumFrozen])
+  }, [
+    activeAsset,
+    config,
+    ensureClients,
+    playback.kind,
+    playback.positionSample,
+    playback.positionSeconds,
+    spectrumComparison,
+    spectrumFrozen,
+  ])
 
   const playPause = useCallback(() => {
     if (!activeAsset) return
@@ -775,6 +955,22 @@ export function App() {
     if (playback.kind === 'playing') engine.pause()
     else void engine.play().catch((error: unknown) => setErrorMessage(error instanceof Error ? error.message : '无法开始播放'))
   }, [activeAsset, ensureEngine, playback.kind])
+
+  const toggleSpectrumComparison = useCallback(() => {
+    clientsRef.current?.realtime.invalidateAnalysis()
+    if (spectrumComparison) setRealtimeResult(null)
+    else setRealtimeChannelResults([])
+    setSpectrumFrozen(false)
+    setSpectrumComparison((value) => !value)
+  }, [spectrumComparison])
+
+  const toggleSpectrumFreeze = useCallback(() => {
+    if (!spectrumFrozen) {
+      clientsRef.current?.realtime.invalidateAnalysis()
+      setFrozenTime(playback.positionSeconds)
+    }
+    setSpectrumFrozen((frozen) => !frozen)
+  }, [playback.positionSeconds, spectrumFrozen])
 
   const handleConfigChange = useCallback((next: WorkspaceAnalysisConfig) => {
     if (
@@ -944,7 +1140,13 @@ export function App() {
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       const target = event.target
-      if (target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement) return
+      if (
+        target instanceof HTMLElement
+        && (
+          target.isContentEditable
+          || target.matches('input, select, textarea, button, a[href], [role="button"]')
+        )
+      ) return
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'o') {
         event.preventDefault()
         fileInputRef.current?.click()
@@ -988,6 +1190,23 @@ export function App() {
   })), [activeId, assets])
 
   const currentTimeForSpectrum = spectrumFrozen ? frozenTime : playback.positionSeconds
+  const spectrumComparisonSeries = useMemo(() => {
+    if (!activeAsset) return []
+    const descriptors = describeChannelLayout(
+      activeAsset.channelLayout,
+      activeAsset.buffer.numberOfChannels,
+    )
+    const visibleChannels = new Set(activeAsset.visibleChannels)
+    return realtimeChannelResults
+      .filter(({ channelIndex }) => visibleChannels.has(channelIndex))
+      .map(({ channelIndex, preview }) => ({
+        channelIndex,
+        label: descriptors[channelIndex]?.shortLabel ?? `CH ${channelIndex + 1}`,
+        color: CHANNEL_SPECTRUM_COLORS[channelIndex % CHANNEL_SPECTRUM_COLORS.length]
+          ?? CHANNEL_SPECTRUM_COLORS[0],
+        result: preview,
+      }))
+  }, [activeAsset, realtimeChannelResults])
   const busy = importing || analyzing || exporting
 
   return (
@@ -1028,11 +1247,17 @@ export function App() {
             <ChannelPanel
               channelCount={activeAsset.buffer.numberOfChannels}
               visibleChannels={activeAsset.visibleChannels}
+              mutedChannels={activeAsset.mutedChannels}
+              soloChannels={activeAsset.soloChannels}
+              layout={activeAsset.channelLayout}
               analysisChannel={config.channel}
               onToggleVisibility={toggleChannelVisibility}
               onIsolate={isolateChannel}
               onShowAll={showAllChannels}
               onResetVisible={resetVisibleChannels}
+              onToggleMute={toggleChannelMute}
+              onToggleSolo={toggleChannelSolo}
+              onLayoutChange={changeChannelLayout}
             />
           ) : null}
         />
@@ -1070,7 +1295,8 @@ export function App() {
               <div className="analysis-tab-meta">
                 {analysisStale && <span className="stale-badge">参数已变更</span>}
                 <span>{config.fftSize} FFT · {config.window.toUpperCase()}</span>
-                {analysisTab === 'spectrum' && <button className={`freeze-button ${spectrumFrozen ? 'active' : ''}`} onClick={() => { if (!spectrumFrozen) setFrozenTime(playback.positionSeconds); setSpectrumFrozen((value) => !value) }}><Snowflake size={11} /> {spectrumFrozen ? '已冻结' : '冻结'}</button>}
+                {analysisTab === 'spectrum' && <button type="button" className={`freeze-button ${spectrumComparison ? 'active' : ''}`} aria-pressed={spectrumComparison} onClick={toggleSpectrumComparison}><Layers3 size={11} /> {spectrumComparison ? '多声道对比' : '单频谱'}</button>}
+                {analysisTab === 'spectrum' && <button type="button" className={`freeze-button ${spectrumFrozen ? 'active' : ''}`} aria-pressed={spectrumFrozen} onClick={toggleSpectrumFreeze}><Snowflake size={11} /> {spectrumFrozen ? '已冻结' : '冻结'}</button>}
               </div>
             </nav>
             <div className="workspace-panel-body">
@@ -1082,6 +1308,8 @@ export function App() {
                   maxDb={config.maxDb}
                   frequencyScale={config.frequencyScale}
                   frozen={spectrumFrozen}
+                  comparisonEnabled={spectrumComparison}
+                  comparisonSeries={spectrumComparisonSeries}
                 />
               )}
               {analysisTab === 'spectrogram' && (

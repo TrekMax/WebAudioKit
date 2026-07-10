@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
-import type { StftPreviewResult } from '../audio/analysis'
+import type {
+  MultiChannelStftPreviewResult,
+  StftPreviewResult,
+} from '../audio/analysis'
 import type { WaveformPyramid } from '../audio/peaks'
 import {
   AnalysisWorkerCancelledError,
@@ -126,6 +129,20 @@ function stftResult(value = -12): StftPreviewResult {
   }
 }
 
+function multiChannelResult(
+  channelIndices: readonly number[],
+): MultiChannelStftPreviewResult {
+  return {
+    results: channelIndices.map((channelIndex) => ({
+      channelIndex,
+      preview: {
+        ...stftResult(-12 - channelIndex),
+        channelMode: { kind: 'channel', index: channelIndex },
+      },
+    })),
+  }
+}
+
 function peakResult(): WaveformPyramid {
   return {
     assetId: 'asset-a',
@@ -182,6 +199,72 @@ describe('AnalysisWorkerClient', () => {
     client.terminate()
   })
 
+  it('submits selected channels as one transferable analysis job', async () => {
+    const { client, worker } = createClient()
+    const channels = [new Float32Array(8), new Float32Array(8)]
+    const progress: number[] = []
+    const job = client.startAnalyzeChannels(
+      {
+        channels,
+        channelIndices: [1, 0],
+        options: { sampleRate: 8, fftSize: 8, frameCount: 1 },
+      },
+      { onProgress: ({ ratio }) => progress.push(ratio) },
+    )
+    const request = worker.posted[0]?.message
+    if (request === undefined) {
+      throw new Error('Expected an analyze-channels request')
+    }
+
+    expect(worker.posted).toHaveLength(1)
+    expect(request).toMatchObject({
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      requestId: job.requestId,
+      jobId: job.jobId,
+      type: 'analyze-channels',
+      payload: { channelIndices: [1, 0] },
+    })
+    expect(worker.posted[0]?.transfer).toEqual([
+      channels[0]?.buffer,
+      channels[1]?.buffer,
+    ])
+
+    worker.emit(responseFor(request, {
+      type: 'progress',
+      completed: 1,
+      total: 2,
+    }))
+    const result = multiChannelResult([1, 0])
+    worker.emit(responseFor(request, { type: 'result', payload: result }))
+
+    await expect(job.result).resolves.toBe(result)
+    expect(progress).toEqual([0.5])
+    client.terminate()
+  })
+
+  it('rejects a result payload that does not match the pending request type', async () => {
+    const { client, worker } = createClient()
+    const job = client.startAnalyzeChannels(
+      {
+        channels: [new Float32Array(8), new Float32Array(8)],
+        channelIndices: [0, 1],
+        options: { sampleRate: 8, fftSize: 8, frameCount: 1 },
+      },
+      { transferChannels: false },
+    )
+    const request = worker.posted[0]?.message
+    if (request === undefined) throw new Error('Expected an analysis request')
+
+    worker.emit(responseFor(request, { type: 'result', payload: stftResult() }))
+
+    await expect(job.result).rejects.toMatchObject({
+      name: 'AnalysisWorkerError',
+      code: 'ANALYSIS_PROTOCOL_INVALID_RESULT',
+      retryable: false,
+    })
+    client.terminate()
+  })
+
   it('invalidates and cancels an older analysis generation without accepting its result', async () => {
     const { client, worker } = createClient()
     const first = client.startAnalyze(
@@ -212,6 +295,42 @@ describe('AnalysisWorkerClient', () => {
     worker.emit(responseFor(secondRequest, { type: 'result', payload: currentResult }))
 
     await expect(second.result).resolves.toBe(currentResult)
+    client.terminate()
+  })
+
+  it('shares generation invalidation between single and multi-channel analysis', async () => {
+    const { client, worker } = createClient()
+    const first = client.startAnalyzeChannels(
+      {
+        channels: [new Float32Array(8), new Float32Array(8)],
+        channelIndices: [0, 1],
+        options: { sampleRate: 8, fftSize: 8, frameCount: 1 },
+      },
+      { transferChannels: false },
+    )
+    const firstRejection = expect(first.result).rejects.toBeInstanceOf(
+      StaleAnalysisWorkerResultError,
+    )
+    const current = client.startAnalyze(
+      {
+        channels: [new Float32Array(8)],
+        options: { sampleRate: 8, fftSize: 8 },
+      },
+      { transferChannels: false },
+    )
+
+    await firstRejection
+    expect(worker.posted[1]?.message).toMatchObject({
+      type: 'cancel',
+      payload: { targetJobId: first.jobId },
+    })
+    const request = worker.posted[2]?.message
+    if (request === undefined) {
+      throw new Error('Expected the current analyze request')
+    }
+    const result = stftResult(-9)
+    worker.emit(responseFor(request, { type: 'result', payload: result }))
+    await expect(current.result).resolves.toBe(result)
     client.terminate()
   })
 

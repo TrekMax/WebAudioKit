@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
-import { computeStftPreview, type StftPreviewResult } from '../audio/analysis'
+import {
+  computeStftPreview,
+  type ChannelBatchAnalysisOptions,
+  type MultiChannelStftPreviewResult,
+  type StftPreviewResult,
+} from '../audio/analysis'
 import {
   WORKER_PROTOCOL_VERSION,
   createRequest,
@@ -37,6 +42,16 @@ function terminalResponses(responses: readonly PostedResponse[]): AnalysisWorker
       response.type === 'cancelled' ||
       response.type === 'error'
     ))
+}
+
+function indexOfMaximum(values: Float32Array): number {
+  let maximumIndex = 0
+  for (let index = 1; index < values.length; index += 1) {
+    if ((values[index] ?? -Infinity) > (values[maximumIndex] ?? -Infinity)) {
+      maximumIndex = index
+    }
+  }
+  return maximumIndex
 }
 
 describe('analysis worker runtime', () => {
@@ -83,6 +98,73 @@ describe('analysis worker runtime', () => {
       actual.frequenciesHz.buffer,
       actual.valuesDbfs.buffer,
     ]))
+  })
+
+  it('analyzes selected channels in one job and transfers every result once', async () => {
+    const collector = responseCollector()
+    const runtime = createAnalysisWorkerRuntime(collector.post, {
+      yieldToEventLoop: () => Promise.resolve(),
+      now: () => 1_000,
+    })
+    const fftSize = 64
+    const channels = Array.from(
+      { length: 4 },
+      (_, channelIndex) => Float32Array.from(
+        { length: fftSize },
+        (_, sampleIndex) => Math.sin(
+          (2 * Math.PI * (channelIndex + 1) * 4 * sampleIndex) / fftSize,
+        ),
+      ),
+    )
+    const options = {
+      sampleRate: 48_000,
+      fftSize,
+      hopSize: fftSize,
+      frameCount: 1,
+      minDb: -120,
+      maxDb: 0,
+      // The untrusted boundary must normalize this obsolete/ambiguous field.
+      channelMode: { kind: 'mix' },
+    } as unknown as ChannelBatchAnalysisOptions
+    const request = createRequest(
+      'request-channels',
+      'job-channels',
+      'analyze-channels',
+      { channels, channelIndices: [3, 0, 2], options },
+    )
+
+    await runtime.handleMessage(request)
+
+    const terminal = terminalResponses(collector.responses)
+    expect(terminal).toHaveLength(1)
+    if (terminal[0]?.type !== 'result' || !('results' in terminal[0].payload)) {
+      throw new Error('Expected a multi-channel analysis result')
+    }
+    const result = terminal[0].payload as MultiChannelStftPreviewResult
+    expect(result.results.map(({ channelIndex }) => channelIndex)).toEqual([
+      3, 0, 2,
+    ])
+    expect(result.results.map(({ preview }) => preview.channelMode)).toEqual([
+      { kind: 'channel', index: 3 },
+      { kind: 'channel', index: 0 },
+      { kind: 'channel', index: 2 },
+    ])
+    expect(result.results.map(({ preview }) => (
+      indexOfMaximum(preview.valuesDbfs)
+    ))).toEqual([16, 4, 12])
+
+    const first = result.results[0]?.preview
+    if (first === undefined) {
+      throw new Error('Expected a first channel preview')
+    }
+    expect(result.results[1]?.preview.frameIndices).toBe(first.frameIndices)
+    expect(collector.responses.at(-1)?.transfer).toEqual(expect.arrayContaining([
+      first.frameIndices.buffer,
+      first.timesSeconds.buffer,
+      first.frequenciesHz.buffer,
+      ...result.results.map(({ preview }) => preview.valuesDbfs.buffer),
+    ]))
+    expect(collector.responses.at(-1)?.transfer).toHaveLength(6)
   })
 
   it('builds and transfers a peak pyramid whose tail contains no synthetic zero', async () => {
@@ -157,6 +239,119 @@ describe('analysis worker runtime', () => {
       jobId: cancelRequest.jobId,
       type: 'result',
       payload: { targetJobId: request.jobId, cancelled: true },
+    }])
+  })
+
+  it('lets cancellation win between channels in a batch job', async () => {
+    const collector = responseCollector()
+    const releases: Array<() => void> = []
+    const runtime = createAnalysisWorkerRuntime(collector.post, {
+      yieldToEventLoop: () => new Promise<void>((resolve) => releases.push(resolve)),
+      now: () => 1_000,
+    })
+    const request = createRequest(
+      'request-cancel-channels',
+      'job-cancel-channels',
+      'analyze-channels',
+      {
+        channels: [new Float32Array(8), new Float32Array(8)],
+        channelIndices: [0, 1],
+        options: { sampleRate: 8, fftSize: 8, frameCount: 1 },
+      },
+    )
+    const running = runtime.handleMessage(request)
+
+    releases.shift()?.()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(releases).toHaveLength(1)
+
+    const cancelRequest = createRequest(
+      'request-cancel-channels-command',
+      'job-cancel-channels-command',
+      'cancel',
+      { targetJobId: request.jobId },
+    )
+    await runtime.handleMessage(cancelRequest)
+    releases.shift()?.()
+    await running
+
+    expect(terminalResponses(collector.responses).filter(
+      (response) => response.requestId === request.requestId,
+    )).toEqual([{
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      requestId: request.requestId,
+      jobId: request.jobId,
+      type: 'cancelled',
+    }])
+  })
+
+  it('rejects empty, duplicate, and out-of-range channel selections', async () => {
+    const collector = responseCollector()
+    const runtime = createAnalysisWorkerRuntime(collector.post, {
+      yieldToEventLoop: () => Promise.resolve(),
+    })
+    const selections = [[], [0, 0], [2]]
+
+    for (let index = 0; index < selections.length; index += 1) {
+      await runtime.handleMessage(createRequest(
+        `request-invalid-channels-${index}`,
+        `job-invalid-channels-${index}`,
+        'analyze-channels',
+        {
+          channels: [new Float32Array(8), new Float32Array(8)],
+          channelIndices: selections[index] ?? [],
+          options: { sampleRate: 8, fftSize: 8, frameCount: 1 },
+        },
+      ))
+    }
+
+    const errors = terminalResponses(collector.responses)
+    expect(errors).toHaveLength(3)
+    expect(errors.map((response) => (
+      response.type === 'error' ? response.error.code : response.type
+    ))).toEqual([
+      'ANALYSIS_INVALID_REQUEST',
+      'ANALYSIS_INVALID_REQUEST',
+      'ANALYSIS_INVALID_REQUEST',
+    ])
+    expect(errors.map((response) => (
+      response.type === 'error' ? response.error.message : ''
+    ))).toEqual([
+      'At least one analysis channel index is required',
+      'Analysis channel indices must be unique',
+      'Selected analysis channel is out of range',
+    ])
+  })
+
+  it('rejects a multi-channel request without an explicit frame count', async () => {
+    const collector = responseCollector()
+    const runtime = createAnalysisWorkerRuntime(collector.post, {
+      yieldToEventLoop: () => Promise.resolve(),
+    })
+
+    await runtime.handleMessage({
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      requestId: 'request-missing-frame-count',
+      jobId: 'job-missing-frame-count',
+      type: 'analyze-channels',
+      payload: {
+        channels: [new Float32Array(8)],
+        channelIndices: [0],
+        options: { sampleRate: 8, fftSize: 8 },
+      },
+    })
+
+    expect(terminalResponses(collector.responses)).toEqual([{
+      protocolVersion: WORKER_PROTOCOL_VERSION,
+      requestId: 'request-missing-frame-count',
+      jobId: 'job-missing-frame-count',
+      type: 'error',
+      error: {
+        code: 'ANALYSIS_INVALID_REQUEST',
+        message: 'Multi-channel analysis requires an explicit frameCount',
+        retryable: false,
+      },
     }])
   })
 

@@ -27,6 +27,12 @@ interface PlaybackSession {
   readonly rate: number
 }
 
+interface ChannelRouting {
+  readonly splitter: ChannelSplitterNode
+  readonly gains: GainNode[]
+  readonly merger: ChannelMergerNode
+}
+
 type StateBeforeLock = 'ready' | 'paused' | 'ended'
 
 /**
@@ -42,6 +48,11 @@ export class AudioEngine {
   private readonly listeners = new Set<PlaybackListener>()
 
   private buffer: AudioBuffer | null = null
+  private splitterNode: ChannelSplitterNode | null = null
+  private mergerNode: ChannelMergerNode | null = null
+  private channelGainNodes: GainNode[] = []
+  private channelMuted: boolean[] = []
+  private channelSolo: boolean[] = []
   private assetId: AssetId | null = null
   private kind: PlaybackKind = 'empty'
   private positionSample: SampleIndex = 0
@@ -145,7 +156,18 @@ export class AudioEngine {
       throw new RangeError('Asset id must not be empty')
     }
 
+    // Build the replacement graph before releasing the current one so a
+    // browser allocation/connection failure cannot leave the existing asset
+    // in a partially unloaded state.
+    const nextRouting = this.createChannelRouting(buffer.numberOfChannels)
+
     this.stopActiveSession()
+    this.releaseChannelRouting()
+    this.splitterNode = nextRouting.splitter
+    this.channelGainNodes = nextRouting.gains
+    this.mergerNode = nextRouting.merger
+    this.channelMuted = Array.from({ length: buffer.numberOfChannels }, () => false)
+    this.channelSolo = Array.from({ length: buffer.numberOfChannels }, () => false)
     this.buffer = buffer
     this.assetId = nextAssetId
     this.positionSample = requestedPosition
@@ -172,6 +194,7 @@ export class AudioEngine {
   unload(): PlaybackSnapshot {
     this.assertNotDisposed()
     this.stopActiveSession()
+    this.releaseChannelRouting()
     this.buffer = null
     this.assetId = null
     this.kind = 'empty'
@@ -413,6 +436,32 @@ export class AudioEngine {
     return this.setMuted(!this.muted)
   }
 
+  setChannelMuted(channelIndex: number, muted: boolean): PlaybackSnapshot {
+    this.assertNotDisposed()
+    this.assertChannelIndex(channelIndex)
+    if (this.channelMuted[channelIndex] === muted) {
+      return this.snapshot()
+    }
+
+    this.channelMuted[channelIndex] = muted
+    this.applyChannelGains()
+    this.emit()
+    return this.snapshot()
+  }
+
+  setChannelSolo(channelIndex: number, solo: boolean): PlaybackSnapshot {
+    this.assertNotDisposed()
+    this.assertChannelIndex(channelIndex)
+    if (this.channelSolo[channelIndex] === solo) {
+      return this.snapshot()
+    }
+
+    this.channelSolo[channelIndex] = solo
+    this.applyChannelGains()
+    this.emit()
+    return this.snapshot()
+  }
+
   setPlaybackRate(rate: number): PlaybackSnapshot {
     this.assertNotDisposed()
     if (!Number.isFinite(rate) || rate < MIN_PLAYBACK_RATE || rate > MAX_PLAYBACK_RATE) {
@@ -467,6 +516,8 @@ export class AudioEngine {
       loop: this.loop,
       volume: this.volume,
       muted: this.muted,
+      channelMuted: [...this.channelMuted],
+      channelSolo: [...this.channelSolo],
       playbackRate: this.playbackRate,
       contextState: this.context.state,
       sessionId: this.activeSession?.id ?? null,
@@ -514,9 +565,12 @@ export class AudioEngine {
     const sessionId = `${this.assetId ?? 'audio'}:${++this.sessionSequence}`
 
     try {
+      if (!this.splitterNode) {
+        throw new Error('Channel routing is unavailable')
+      }
       node.buffer = buffer
       node.playbackRate.setValueAtTime(this.playbackRate, this.context.currentTime)
-      node.connect(this.gainNode)
+      node.connect(this.splitterNode)
 
       const session: PlaybackSession = {
         id: sessionId,
@@ -617,15 +671,103 @@ export class AudioEngine {
   }
 
   private applyGain(): void {
-    const now = this.context.currentTime
     const target = this.muted ? 0 : this.volume
-    const gain = this.gainNode.gain
-    gain.cancelScheduledValues(now)
-    gain.setValueAtTime(gain.value, now)
+    this.rampGain(this.gainNode.gain, target)
+  }
+
+  private applyChannelGains(): void {
+    const hasSolo = this.channelSolo.some(Boolean)
+    for (let channelIndex = 0; channelIndex < this.channelGainNodes.length; channelIndex += 1) {
+      const channelGain = this.channelGainNodes[channelIndex]
+      if (!channelGain) {
+        continue
+      }
+      const audible =
+        !this.channelMuted[channelIndex] && (!hasSolo || this.channelSolo[channelIndex])
+      this.rampGain(channelGain.gain, audible ? 1 : 0)
+    }
+  }
+
+  private rampGain(gain: AudioParam, target: number): void {
+    const now = this.context.currentTime
+    if (typeof gain.cancelAndHoldAtTime === 'function') {
+      gain.cancelAndHoldAtTime(now)
+    } else {
+      gain.cancelScheduledValues(now)
+      gain.setValueAtTime(gain.value, now)
+    }
     if (this.gainRampSeconds === 0) {
       gain.setValueAtTime(target, now)
-    } else {
-      gain.linearRampToValueAtTime(target, now + this.gainRampSeconds)
+      return
+    }
+    gain.linearRampToValueAtTime(target, now + this.gainRampSeconds)
+  }
+
+  private createChannelRouting(numberOfChannels: number): ChannelRouting {
+    let splitter: ChannelSplitterNode | null = null
+    let merger: ChannelMergerNode | null = null
+    const gains: GainNode[] = []
+
+    try {
+      splitter = this.context.createChannelSplitter(numberOfChannels)
+      merger = this.context.createChannelMerger(numberOfChannels)
+
+      for (let channelIndex = 0; channelIndex < numberOfChannels; channelIndex += 1) {
+        const gain = this.context.createGain()
+        gains.push(gain)
+        gain.gain.setValueAtTime(1, this.context.currentTime)
+        splitter.connect(gain, channelIndex, 0)
+        gain.connect(merger, 0, channelIndex)
+      }
+      merger.connect(this.gainNode)
+
+      return { splitter, gains, merger }
+    } catch (error) {
+      if (splitter) {
+        tryDisconnect(splitter)
+      }
+      for (const gain of gains) {
+        tryDisconnect(gain)
+      }
+      if (merger) {
+        tryDisconnect(merger)
+      }
+      throw error
+    }
+  }
+
+  private releaseChannelRouting(): void {
+    const splitter = this.splitterNode
+    const merger = this.mergerNode
+    const gains = this.channelGainNodes
+
+    this.splitterNode = null
+    this.mergerNode = null
+    this.channelGainNodes = []
+    this.channelMuted = []
+    this.channelSolo = []
+
+    if (splitter) {
+      tryDisconnect(splitter)
+    }
+    for (const gain of gains) {
+      tryDisconnect(gain)
+    }
+    if (merger) {
+      tryDisconnect(merger)
+    }
+  }
+
+  private assertChannelIndex(channelIndex: number): void {
+    const numberOfChannels = this.buffer?.numberOfChannels ?? 0
+    if (
+      !Number.isSafeInteger(channelIndex) ||
+      channelIndex < 0 ||
+      channelIndex >= numberOfChannels
+    ) {
+      throw new RangeError(
+        `Channel index must reference a loaded source channel within [0, ${numberOfChannels})`,
+      )
     }
   }
 

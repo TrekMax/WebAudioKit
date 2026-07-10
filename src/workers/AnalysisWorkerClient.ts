@@ -1,9 +1,13 @@
-import type { StftPreviewResult } from '../audio/analysis'
+import type {
+  MultiChannelStftPreviewResult,
+  StftPreviewResult,
+} from '../audio/analysis'
 import type { WaveformPyramid } from '../audio/peaks'
 import {
   WORKER_PROTOCOL_VERSION,
   createRequest,
   isAnalysisWorkerResponse,
+  type AnalyzeChannelsPayload,
   type AnalyzePayload,
   type AnalysisWorkerRequest,
   type BuildPeaksPayload,
@@ -52,15 +56,92 @@ export interface AnalysisWorkerClientOptions {
 }
 
 type JobKind = 'analysis' | 'peaks'
+type JobRequestType = 'analyze' | 'analyze-channels' | 'build-peaks'
 
 interface PendingRequest {
   readonly requestId: string
   readonly jobId: string
   readonly kind: JobKind
+  readonly requestType: JobRequestType
   readonly generation: number
   readonly onProgress?: (progress: WorkerJobProgress) => void
   readonly resolve: (value: unknown) => void
   readonly reject: (reason: unknown) => void
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function isStftPreviewResult(value: unknown): value is StftPreviewResult {
+  if (!isRecord(value)) return false
+  const frameCount = value.frameCount
+  const binCount = value.binCount
+  return (
+    Number.isSafeInteger(frameCount)
+    && (frameCount as number) >= 0
+    && Number.isSafeInteger(binCount)
+    && (binCount as number) > 0
+    && value.frameIndices instanceof Float64Array
+    && value.frameIndices.length === frameCount
+    && value.timesSeconds instanceof Float64Array
+    && value.timesSeconds.length === frameCount
+    && value.frequenciesHz instanceof Float64Array
+    && value.frequenciesHz.length === binCount
+    && value.valuesDbfs instanceof Float32Array
+    && value.valuesDbfs.length === (frameCount as number) * (binCount as number)
+  )
+}
+
+function isMultiChannelStftPreviewResult(
+  value: unknown,
+): value is MultiChannelStftPreviewResult {
+  if (!isRecord(value) || !Array.isArray(value.results)) return false
+  const channels = new Set<number>()
+  for (const item of value.results) {
+    if (
+      !isRecord(item)
+      || !Number.isSafeInteger(item.channelIndex)
+      || (item.channelIndex as number) < 0
+      || channels.has(item.channelIndex as number)
+      || !isStftPreviewResult(item.preview)
+    ) return false
+    channels.add(item.channelIndex as number)
+  }
+  return value.results.length > 0
+}
+
+function isWaveformPyramid(value: unknown): value is WaveformPyramid {
+  if (
+    !isRecord(value)
+    || typeof value.assetId !== 'string'
+    || !Number.isSafeInteger(value.sourceLength)
+    || (value.sourceLength as number) < 0
+    || !Number.isSafeInteger(value.baseBlockSize)
+    || (value.baseBlockSize as number) <= 0
+    || !Array.isArray(value.levels)
+  ) return false
+
+  return value.levels.every((level) => (
+    isRecord(level)
+    && Number.isSafeInteger(level.samplesPerBlock)
+    && (level.samplesPerBlock as number) > 0
+    && Array.isArray(level.channels)
+    && level.channels.every((channel) => (
+      isRecord(channel)
+      && channel.mins instanceof Float32Array
+      && channel.maxs instanceof Float32Array
+      && channel.mins.length === channel.maxs.length
+    ))
+  ))
+}
+
+function isExpectedResult(requestType: JobRequestType, value: unknown): boolean {
+  switch (requestType) {
+    case 'analyze': return isStftPreviewResult(value)
+    case 'analyze-channels': return isMultiChannelStftPreviewResult(value)
+    case 'build-peaks': return isWaveformPyramid(value)
+  }
 }
 
 export class AnalysisWorkerError extends Error {
@@ -170,6 +251,26 @@ export class AnalysisWorkerClient {
     )
   }
 
+  analyzeChannels(
+    payload: AnalyzeChannelsPayload,
+    options: WorkerJobOptions = {},
+  ): Promise<MultiChannelStftPreviewResult> {
+    return this.startAnalyzeChannels(payload, options).result
+  }
+
+  startAnalyzeChannels(
+    payload: AnalyzeChannelsPayload,
+    options: WorkerJobOptions = {},
+  ): AnalysisWorkerJob<MultiChannelStftPreviewResult> {
+    return this.startJob<MultiChannelStftPreviewResult>(
+      'analysis',
+      'analyze-channels',
+      payload,
+      payload.channels,
+      options,
+    )
+  }
+
   buildPeaks(
     payload: BuildPeaksPayload,
     options: WorkerJobOptions = {},
@@ -239,8 +340,8 @@ export class AnalysisWorkerClient {
 
   private startJob<TResult>(
     kind: JobKind,
-    type: 'analyze' | 'build-peaks',
-    payload: AnalyzePayload | BuildPeaksPayload,
+    type: JobRequestType,
+    payload: AnalyzePayload | AnalyzeChannelsPayload | BuildPeaksPayload,
     channels: readonly Float32Array[],
     options: WorkerJobOptions,
   ): AnalysisWorkerJob<TResult> {
@@ -271,6 +372,7 @@ export class AnalysisWorkerClient {
       requestId,
       jobId,
       kind,
+      requestType: type,
       generation,
       onProgress: options.onProgress,
       resolve: (value) => resolveResult(value as TResult),
@@ -281,7 +383,14 @@ export class AnalysisWorkerClient {
 
     const request = type === 'analyze'
       ? createRequest(requestId, jobId, type, payload as AnalyzePayload)
-      : createRequest(requestId, jobId, type, payload as BuildPeaksPayload)
+      : type === 'analyze-channels'
+        ? createRequest(
+            requestId,
+            jobId,
+            type,
+            payload as AnalyzeChannelsPayload,
+          )
+        : createRequest(requestId, jobId, type, payload as BuildPeaksPayload)
     const transfer = options.transferChannels === false
       ? []
       : collectChannelTransfers(channels)
@@ -381,6 +490,14 @@ export class AnalysisWorkerClient {
         return
       case 'result':
         this.removePending(pending)
+        if (!isExpectedResult(pending.requestType, response.payload)) {
+          pending.reject(new AnalysisWorkerError({
+            code: 'ANALYSIS_PROTOCOL_INVALID_RESULT',
+            message: `Worker returned an invalid result for ${pending.requestType}`,
+            retryable: false,
+          }))
+          return
+        }
         pending.resolve(response.payload)
         return
       case 'cancelled':

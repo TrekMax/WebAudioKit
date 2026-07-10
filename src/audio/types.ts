@@ -33,6 +33,10 @@ export interface PlaybackSnapshot {
   readonly loop: boolean
   readonly volume: number
   readonly muted: boolean
+  /** Per-source-channel playback mute state, indexed from zero. */
+  readonly channelMuted: readonly boolean[]
+  /** Per-source-channel playback solo state, indexed from zero. */
+  readonly channelSolo: readonly boolean[]
   readonly playbackRate: number
   readonly contextState: AudioContextState
   readonly sessionId: string | null
