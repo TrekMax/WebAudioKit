@@ -160,8 +160,7 @@ interface Selection {
 
 type ChannelMode =
   | { kind: "mix" }
-  | { kind: "channel"; index: number }
-  | { kind: "stereo" };
+  | { kind: "channel"; index: number };
 
 interface AnalysisConfig {
   fftSize: 512 | 1024 | 2048 | 4096 | 8192 | 16384 | 32768;
@@ -200,6 +199,7 @@ interface SpectrogramTileRef {
 - 音频资源的描述信息与 fingerprint；不默认持久化原始文件内容。
 - 选择区、播放位置、循环开关、音量、倍速。
 - FFT 参数、视图范围、色板、3D 相机参数。
+- 当前分析声道和波形可见声道索引；索引统一使用 0-based 存储、`Channel 1…N` 展示。
 - 峰值金字塔、声谱瓦片、缓存版本与最近访问时间。
 
 仅运行时：
@@ -381,9 +381,9 @@ sample = anchorSample + round(elapsed * sampleRate * playbackRate)
 ### 8.1 输入与声道
 
 - 输入 PCM 为 `Float32`，满刻度约定为 `[-1, 1]`，超过范围的解码样本在分析时保留、导出整数 PCM 时裁剪。
-- `channel` 模式分析指定声道。
+- `channel` 模式分析任意指定源声道，索引必须满足 `0 <= index < numberOfChannels`。
 - `mix` 模式按声道算术平均：`x[n] = sum(x_c[n]) / C`。该策略可能因反相抵消；UI 必须明确标注“混合”，并允许切换声道。
-- `stereo` 用于并列展示左右声道；内部仍生成两组独立结果，不把左右拼成一个 FFT。
+- 波形可见声道集合只控制 Canvas 轨道，不进入 FFT 配置，也不得改变 Web Audio 播放图或 WAV 编码输入。
 
 ### 8.2 分帧
 
@@ -471,7 +471,7 @@ q = round(255 * clamp((dBFS - minDb) / (maxDb - minDb), 0, 1))
 | 频率范围 | 0 至 Nyquist |
 | 频率轴 | 对数（0 Hz 单独处理，显示下限建议 20 Hz） |
 | dB 范围 | -100 至 0 dBFS |
-| 声道 | 双声道文件默认 mix，可切换 L/R |
+| 声道 | 默认 mix，可切换到当前资源任意 `Channel 1…N` |
 
 ## 9. 波形峰值金字塔
 
@@ -541,6 +541,8 @@ interface WaveformPyramid {
 ### 11.1 波形 Canvas 2D
 
 - 背景/网格、波形主体、选择区、播放头分层绘制；静态层缓存到离屏 canvas，播放时只重绘覆盖层。
+- 导入时为全部源声道生成峰值层；渲染时仅遍历 `visibleChannels`，默认 `[0, 1]`（单声道为 `[0]`）。
+- 每条可见轨道保留最小高度；总高度超出宿主时使用纵向滚动，轨道标签显示源声道编号而非可见顺序。
 - Canvas backing size 为 CSS 尺寸乘 DPR，DPR 默认封顶 2，防止 4K 高 DPR 设备产生过大缓冲。
 - 时间到像素的变换集中为 `ViewportTransform`；鼠标事件先从 CSS pixel 转到时间，再对齐采样点。
 - wheel 缩放以指针时间为锚点；拖动平移；选择区 handle 有最小命中宽度。
@@ -684,6 +686,8 @@ time_seconds,frame_index,frequency_hz,bin_index,magnitude_dbfs
 | `spectrogramTiles` | fingerprint + configHash + tileIndex | 量化 tile、尺寸、lastAccessed |
 | `cacheIndex` | cacheKey | sizeBytes、kind、lastAccessed、version |
 
+当前 recent-workspace schema 为 v2，使用 `"mix" | number` 保存分析声道，并保存去重、升序的 `visibleChannels`。读取 v1 时将 `left/right` 迁移为 `0/1`，随后回写 v2；越界索引在重新关联源文件、获知实际声道数后回退到 `mix` 或默认可见集合。
+
 ### 15.2 策略
 
 - 缓存是派生数据，不是用户唯一数据；任何迁移失败都可删除并重建。
@@ -740,6 +744,9 @@ workingSet ≈ pcmBytes + encodedBytes + peakBytes + visibleTiles + transientChu
 - 不可用时默认 PCM 软预算 384 MiB。
 - 超过软预算时先告警并要求用户确认，默认关闭自动全文件 STFT 和高质量 3D。
 - 预计工作集超过 1 GiB 时 MVP 拒绝解码，避免页面或浏览器进程崩溃；阈值应可通过经过评审的配置调整，而不是散落在组件中。
+- 当前 Worker 输入仍可能产生 PCM 副本，因此实现暂将工作区常驻解码 PCM 总硬上限设为 512 MiB，并按“已有常驻 PCM + 当前任务副本 + 输出”校验 1 GiB 工作集硬门；单文件导入按 `encodedBytes + 2 * decodedPcmBytes` 做解码后的二次校验。后续分块协议落地后再重新评估该上限。
+- 解码前先用编码文件大小和工作区剩余预算执行可得的保守预检；压缩格式无法在解码前可靠推断 PCM，仍需在 `decodeAudioData` 返回后立即二次校验并释放被拒绝结果。
+- 峰值金字塔按源声道串行传输并合并，指定声道 FFT 只复制目标声道，选区 WAV 只复制选区 PCM；`mix` FFT 与全文件 WAV 在当前协议下仍受上述工作集硬门保护。
 
 某些压缩格式在解码前无法可靠获得时长。此时先根据编码文件大小作粗略预警，解码完成后立刻按真实 PCM 大小重新评估。取消后清空所有大对象引用，让 GC 有机会回收，但 UI 不承诺瞬时归还进程内存。
 

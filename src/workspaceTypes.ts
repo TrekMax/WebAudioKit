@@ -1,7 +1,7 @@
 export type SupportedFftSize = 512 | 1024 | 2048 | 4096 | 8192 | 16384 | 32768
 export type WindowName = 'hann' | 'hamming' | 'blackman'
 export type OverlapRatio = 0 | 0.5 | 0.75 | 0.875
-export type AnalysisChannel = 'mix' | 'left' | 'right'
+export type AnalysisChannel = 'mix' | number
 
 export interface WorkspaceAnalysisConfig {
   fftSize: SupportedFftSize

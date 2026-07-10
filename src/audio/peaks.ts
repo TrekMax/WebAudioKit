@@ -260,3 +260,36 @@ export async function buildPeakPyramid(
     levels,
   }
 }
+
+/** Combines independently built channel pyramids without copying peak arrays. */
+export function mergeWaveformPyramids(
+  pyramids: readonly WaveformPyramid[],
+): WaveformPyramid {
+  const first = pyramids[0]
+  if (!first) throw new RangeError('At least one waveform pyramid is required')
+
+  for (const pyramid of pyramids) {
+    if (
+      pyramid.assetId !== first.assetId
+      || pyramid.sourceLength !== first.sourceLength
+      || pyramid.baseBlockSize !== first.baseBlockSize
+      || pyramid.levels.length !== first.levels.length
+    ) throw new RangeError('Waveform pyramid layouts must match')
+  }
+
+  return {
+    assetId: first.assetId,
+    sourceLength: first.sourceLength,
+    baseBlockSize: first.baseBlockSize,
+    levels: first.levels.map((firstLevel, levelIndex) => ({
+      samplesPerBlock: firstLevel.samplesPerBlock,
+      channels: pyramids.flatMap((pyramid) => {
+        const level = pyramid.levels[levelIndex]
+        if (!level || level.samplesPerBlock !== firstLevel.samplesPerBlock) {
+          throw new RangeError('Waveform pyramid levels must match')
+        }
+        return level.channels
+      }),
+    })),
+  }
+}

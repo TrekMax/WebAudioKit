@@ -1,6 +1,5 @@
 import { Activity, BarChart3, Box, Gauge, RotateCcw, Square, Waves } from 'lucide-react'
 import type {
-  AnalysisChannel,
   OverlapRatio,
   SupportedFftSize,
   WindowName,
@@ -11,6 +10,7 @@ import type { Fft3DMode, Fft3DQuality } from './Fft3DView'
 interface AnalysisControlsProps {
   config: WorkspaceAnalysisConfig
   sampleRate: number | null
+  numberOfChannels: number
   disabled: boolean
   analyzing: boolean
   progress: number
@@ -29,6 +29,7 @@ const FFT_SIZES: SupportedFftSize[] = [512, 1024, 2048, 4096, 8192, 16384, 32768
 export function AnalysisControls({
   config,
   sampleRate,
+  numberOfChannels,
   disabled,
   analyzing,
   progress,
@@ -48,6 +49,12 @@ export function AnalysisControls({
   const hopSize = Math.round(config.fftSize * (1 - config.overlap))
   const binWidth = sampleRate ? sampleRate / config.fftSize : 0
   const windowDuration = sampleRate ? (config.fftSize / sampleRate) * 1000 : 0
+  const channelCount = Math.max(0, Math.trunc(numberOfChannels))
+  const selectedChannel = typeof config.channel === 'number'
+    && config.channel >= 0
+    && config.channel < channelCount
+    ? String(config.channel)
+    : 'mix'
 
   return (
     <aside className="inspector panel-surface">
@@ -99,13 +106,19 @@ export function AnalysisControls({
         <label className="field-label">
           <span>分析声道</span>
           <select
-            value={config.channel}
+            value={selectedChannel}
             disabled={disabled}
-            onChange={(event) => update('channel', event.target.value as AnalysisChannel)}
+            onChange={(event) => update(
+              'channel',
+              event.target.value === 'mix' ? 'mix' : Number(event.target.value),
+            )}
           >
             <option value="mix">混合（平均）</option>
-            <option value="left">左 / 声道 1</option>
-            <option value="right">右 / 声道 2</option>
+            {Array.from({ length: channelCount }, (_, channelIndex) => (
+              <option key={channelIndex} value={channelIndex}>
+                Channel {channelIndex + 1}
+              </option>
+            ))}
           </select>
         </label>
         <div className="metric-grid">
@@ -129,8 +142,8 @@ export function AnalysisControls({
           >线性频率</button>
         </div>
         <div className="range-fields">
-          <label><span>最低 dBFS</span><input type="number" min={-180} max={-10} value={config.minDb} onChange={(event) => update('minDb', Number(event.target.value))} /></label>
-          <label><span>最高 dBFS</span><input type="number" min={-20} max={0} value={config.maxDb} onChange={(event) => update('maxDb', Number(event.target.value))} /></label>
+          <label><span>最低 dBFS</span><input type="number" min={-180} max={-10} value={config.minDb} disabled={disabled} onChange={(event) => update('minDb', Number(event.target.value))} /></label>
+          <label><span>最高 dBFS</span><input type="number" min={-20} max={0} value={config.maxDb} disabled={disabled} onChange={(event) => update('maxDb', Number(event.target.value))} /></label>
         </div>
       </section>
 

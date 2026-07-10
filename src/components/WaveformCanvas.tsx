@@ -2,10 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PeakLevel, WaveformPyramid } from '../audio/peaks'
 import { useElementSize } from '../hooks/useElementSize'
 import type { SampleSelection } from '../workspaceTypes'
+import {
+  WAVEFORM_AXIS_HEIGHT,
+  calculateWaveformCanvasHeight,
+  normalizeVisibleChannels,
+} from './waveformLayout'
 
 interface WaveformCanvasProps {
   buffer: AudioBuffer | null
   peaks: WaveformPyramid | null
+  visibleChannels: readonly number[]
   currentSample: number
   selection: SampleSelection | null
   onSeek: (sample: number) => void
@@ -23,9 +29,9 @@ interface DragState {
   pointerXAtStart: number
 }
 
-const AXIS_HEIGHT = 24
 const LEFT_GUTTER = 46
 const RIGHT_GUTTER = 10
+const AXIS_HEIGHT = WAVEFORM_AXIS_HEIGHT
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value))
@@ -58,19 +64,67 @@ function niceTimeStep(secondsPerPixel: number): number {
   return exponent * 10
 }
 
+function drawTimeAxis(
+  context: CanvasRenderingContext2D,
+  width: number,
+  buffer: AudioBuffer | null,
+  view: { start: number; end: number },
+  plotWidth: number,
+): void {
+  context.clearRect(0, 0, width, AXIS_HEIGHT)
+  context.fillStyle = '#090e15'
+  context.fillRect(0, 0, width, AXIS_HEIGHT)
+  context.strokeStyle = '#1d2937'
+  context.beginPath()
+  context.moveTo(0, 0.5)
+  context.lineTo(width, 0.5)
+  context.stroke()
+  if (!buffer) return
+
+  const secondsPerPixel = (view.end - view.start) / buffer.sampleRate / plotWidth
+  const step = niceTimeStep(secondsPerPixel)
+  const startSeconds = view.start / buffer.sampleRate
+  const endSeconds = view.end / buffer.sampleRate
+  const firstTick = Math.ceil(startSeconds / step) * step
+  context.fillStyle = '#5f6e80'
+  context.strokeStyle = '#273544'
+  context.font = '8px DM Mono, monospace'
+  context.textAlign = 'center'
+  for (let time = firstTick; time <= endSeconds + step * 0.01; time += step) {
+    const x = LEFT_GUTTER + ((time - startSeconds) / (endSeconds - startSeconds)) * plotWidth
+    context.beginPath()
+    context.moveTo(x + 0.5, 0)
+    context.lineTo(x + 0.5, 5)
+    context.stroke()
+    context.fillText(`${time.toFixed(step < 1 ? 2 : 1)}s`, x, 16)
+  }
+}
+
 export function WaveformCanvas({
   buffer,
   peaks,
+  visibleChannels,
   currentSample,
   selection,
   onSeek,
   onSelectionChange,
   onControlsReady,
 }: WaveformCanvasProps) {
-  const hostRef = useRef<HTMLDivElement>(null)
+  const scrollAreaRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const size = useElementSize(hostRef)
+  const axisCanvasRef = useRef<HTMLCanvasElement>(null)
+  const size = useElementSize(scrollAreaRef)
   const sourceLength = Math.max(1, buffer?.length ?? 1)
+  const channelIndexes = useMemo(
+    () => normalizeVisibleChannels(visibleChannels, buffer?.numberOfChannels ?? 0),
+    [buffer?.numberOfChannels, visibleChannels],
+  )
+  const layoutHeight = calculateWaveformCanvasHeight(
+    size.height + AXIS_HEIGHT,
+    channelIndexes.length,
+  )
+  const trackCanvasHeight = Math.max(1, layoutHeight - AXIS_HEIGHT)
+  const hasVerticalTrackScroll = trackCanvasHeight > size.height
   const [viewState, setView] = useState({ start: 0, end: 1, sourceLength: 0 })
   const view = useMemo(
     () => viewState.sourceLength === sourceLength
@@ -121,23 +175,26 @@ export function WaveformCanvas({
     if (!canvas || size.width <= 0 || size.height <= 0) return
     const dpr = Math.min(2, window.devicePixelRatio || 1)
     canvas.width = Math.round(size.width * dpr)
-    canvas.height = Math.round(size.height * dpr)
+    canvas.height = Math.round(trackCanvasHeight * dpr)
     canvas.style.width = `${size.width}px`
-    canvas.style.height = `${size.height}px`
+    canvas.style.height = `${trackCanvasHeight}px`
     const context = canvas.getContext('2d')
     if (!context) return
     context.setTransform(dpr, 0, 0, dpr, 0, 0)
-    context.clearRect(0, 0, size.width, size.height)
+    context.clearRect(0, 0, size.width, trackCanvasHeight)
     context.fillStyle = '#080d14'
-    context.fillRect(0, 0, size.width, size.height)
+    context.fillRect(0, 0, size.width, trackCanvasHeight)
 
-    const channels = Math.max(1, Math.min(2, buffer?.numberOfChannels ?? 1))
-    const plotHeight = Math.max(1, size.height - AXIS_HEIGHT)
-    const channelHeight = plotHeight / channels
-    for (let channel = 0; channel < channels; channel += 1) {
-      const top = channel * channelHeight
+    const plotHeight = trackCanvasHeight
+    const channelHeight = channelIndexes.length > 0
+      ? plotHeight / channelIndexes.length
+      : plotHeight
+    for (let trackIndex = 0; trackIndex < channelIndexes.length; trackIndex += 1) {
+      const channelIndex = channelIndexes[trackIndex]
+      if (channelIndex === undefined) continue
+      const top = trackIndex * channelHeight
       const center = top + channelHeight / 2
-      context.fillStyle = channel % 2 ? '#090f16' : '#0a1018'
+      context.fillStyle = trackIndex % 2 ? '#090f16' : '#0a1018'
       context.fillRect(LEFT_GUTTER, top, plotWidth, channelHeight)
       context.strokeStyle = 'rgba(113, 137, 159, 0.18)'
       context.beginPath()
@@ -147,50 +204,59 @@ export function WaveformCanvas({
       context.fillStyle = '#566576'
       context.font = '8px DM Mono, monospace'
       context.textAlign = 'center'
-      context.fillText(channels === 1 ? 'MONO' : channel === 0 ? 'L' : 'R', LEFT_GUTTER / 2, center + 3)
+      const label = buffer?.numberOfChannels === 1 ? 'MONO' : `CH ${channelIndex + 1}`
+      context.fillText(label, LEFT_GUTTER / 2, center + 3)
     }
 
-    if (buffer && peaks && peaks.levels.length > 0) {
+    if (buffer && channelIndexes.length === 0) {
+      context.fillStyle = '#657386'
+      context.font = '10px Inter, sans-serif'
+      context.textAlign = 'center'
+      context.fillText('请选择要显示的声道', LEFT_GUTTER + plotWidth / 2, plotHeight / 2)
+    } else if (buffer && peaks && peaks.levels.length > 0) {
       const samplesPerPixel = (view.end - view.start) / plotWidth
       const level = choosePeakLevel(peaks, samplesPerPixel)
-      if (!level) return
-      const scaleY = channelHeight * 0.43
-      context.strokeStyle = '#25d7ac'
-      context.lineWidth = 1
-      context.globalAlpha = 0.9
-      for (let channel = 0; channel < channels; channel += 1) {
-        const peakChannel = level.channels[Math.min(channel, level.channels.length - 1)]
-        if (!peakChannel) continue
-        const center = channel * channelHeight + channelHeight / 2
-        context.beginPath()
-        for (let x = 0; x < plotWidth; x += 1) {
-          const sampleStart = view.start + (x / plotWidth) * (view.end - view.start)
-          const sampleEnd = view.start + ((x + 1) / plotWidth) * (view.end - view.start)
-          const firstBlock = clamp(Math.floor(sampleStart / level.samplesPerBlock), 0, peakChannel.mins.length - 1)
-          const lastBlock = clamp(Math.floor(sampleEnd / level.samplesPerBlock), firstBlock, peakChannel.mins.length - 1)
-          let min = 1
-          let max = -1
-          for (let block = firstBlock; block <= Math.min(lastBlock, firstBlock + 4); block += 1) {
-            min = Math.min(min, peakChannel.mins[block] ?? 0)
-            max = Math.max(max, peakChannel.maxs[block] ?? 0)
+      if (level) {
+        const scaleY = channelHeight * 0.43
+        context.strokeStyle = '#25d7ac'
+        context.lineWidth = 1
+        context.globalAlpha = 0.9
+        for (let trackIndex = 0; trackIndex < channelIndexes.length; trackIndex += 1) {
+          const channelIndex = channelIndexes[trackIndex]
+          if (channelIndex === undefined) continue
+          const peakChannel = level.channels[channelIndex]
+          if (!peakChannel || peakChannel.mins.length === 0) continue
+          const center = trackIndex * channelHeight + channelHeight / 2
+          context.beginPath()
+          for (let x = 0; x < plotWidth; x += 1) {
+            const sampleStart = view.start + (x / plotWidth) * (view.end - view.start)
+            const sampleEnd = view.start + ((x + 1) / plotWidth) * (view.end - view.start)
+            const firstBlock = clamp(Math.floor(sampleStart / level.samplesPerBlock), 0, peakChannel.mins.length - 1)
+            const lastBlock = clamp(Math.floor(sampleEnd / level.samplesPerBlock), firstBlock, peakChannel.mins.length - 1)
+            let min = 1
+            let max = -1
+            for (let block = firstBlock; block <= Math.min(lastBlock, firstBlock + 4); block += 1) {
+              min = Math.min(min, peakChannel.mins[block] ?? 0)
+              max = Math.max(max, peakChannel.maxs[block] ?? 0)
+            }
+            const canvasX = LEFT_GUTTER + x + 0.5
+            context.moveTo(canvasX, center - max * scaleY)
+            context.lineTo(canvasX, center - min * scaleY)
           }
-          const canvasX = LEFT_GUTTER + x + 0.5
-          context.moveTo(canvasX, center - max * scaleY)
-          context.lineTo(canvasX, center - min * scaleY)
+          context.stroke()
         }
-        context.stroke()
+        context.globalAlpha = 1
       }
-      context.globalAlpha = 1
     } else if (buffer) {
       context.fillStyle = '#657386'
       context.font = '10px Inter, sans-serif'
       context.textAlign = 'center'
-      context.fillText('正在构建多分辨率波形…', LEFT_GUTTER + plotWidth / 2, (size.height - AXIS_HEIGHT) / 2)
+      context.fillText('正在构建多分辨率波形…', LEFT_GUTTER + plotWidth / 2, plotHeight / 2)
     } else {
       context.fillStyle = '#657386'
       context.font = '10px Inter, sans-serif'
       context.textAlign = 'center'
-      context.fillText('导入音频后显示波形', LEFT_GUTTER + plotWidth / 2, (size.height - AXIS_HEIGHT) / 2)
+      context.fillText('导入音频后显示波形', LEFT_GUTTER + plotWidth / 2, plotHeight / 2)
     }
 
     if (buffer && displaySelection && displaySelection.end > displaySelection.start) {
@@ -230,33 +296,17 @@ export function WaveformCanvas({
       context.fill()
     }
 
-    context.fillStyle = '#090e15'
-    context.fillRect(0, plotHeight, size.width, AXIS_HEIGHT)
-    context.strokeStyle = '#1d2937'
-    context.beginPath()
-    context.moveTo(0, plotHeight + 0.5)
-    context.lineTo(size.width, plotHeight + 0.5)
-    context.stroke()
-    if (buffer) {
-      const secondsPerPixel = (view.end - view.start) / buffer.sampleRate / plotWidth
-      const step = niceTimeStep(secondsPerPixel)
-      const startSeconds = view.start / buffer.sampleRate
-      const endSeconds = view.end / buffer.sampleRate
-      const firstTick = Math.ceil(startSeconds / step) * step
-      context.fillStyle = '#5f6e80'
-      context.strokeStyle = '#273544'
-      context.font = '8px DM Mono, monospace'
-      context.textAlign = 'center'
-      for (let time = firstTick; time <= endSeconds + step * 0.01; time += step) {
-        const x = LEFT_GUTTER + ((time - startSeconds) / (endSeconds - startSeconds)) * plotWidth
-        context.beginPath()
-        context.moveTo(x + 0.5, plotHeight)
-        context.lineTo(x + 0.5, plotHeight + 5)
-        context.stroke()
-        context.fillText(`${time.toFixed(step < 1 ? 2 : 1)}s`, x, plotHeight + 16)
-      }
+    const axisCanvas = axisCanvasRef.current
+    const axisContext = axisCanvas?.getContext('2d')
+    if (axisCanvas && axisContext) {
+      axisCanvas.width = Math.round(size.width * dpr)
+      axisCanvas.height = Math.round(AXIS_HEIGHT * dpr)
+      axisCanvas.style.width = `${size.width}px`
+      axisCanvas.style.height = `${AXIS_HEIGHT}px`
+      axisContext.setTransform(dpr, 0, 0, dpr, 0, 0)
+      drawTimeAxis(axisContext, size.width, buffer, view, plotWidth)
     }
-  }, [buffer, currentSample, displaySelection, peaks, plotWidth, size, view])
+  }, [buffer, channelIndexes, currentSample, displaySelection, peaks, plotWidth, size, trackCanvasHeight, view])
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!buffer || event.button !== 0) return
@@ -307,6 +357,13 @@ export function WaveformCanvas({
 
   const handleWheel = (event: React.WheelEvent<HTMLCanvasElement>) => {
     if (!buffer) return
+    if (
+      hasVerticalTrackScroll
+      && !event.ctrlKey
+      && !event.metaKey
+      && Math.abs(event.deltaY) >= Math.abs(event.deltaX)
+    ) return
+
     event.preventDefault()
     const anchor = sampleAtClientX(event.clientX)
     const currentLength = view.end - view.start
@@ -319,17 +376,28 @@ export function WaveformCanvas({
   }
 
   return (
-    <div ref={hostRef} className="plot-host waveform-host">
-      <canvas
-        ref={canvasRef}
-        aria-label="音频波形；拖动创建选区，Shift 拖动平移，滚轮缩放"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={() => setDrag(null)}
-        onPointerLeave={() => setHoverSample(null)}
-        onWheel={handleWheel}
-      />
+    <div className="plot-host waveform-host">
+      <div
+        ref={scrollAreaRef}
+        className="waveform-scroll-area"
+        role="region"
+        aria-label="波形声道轨道"
+        tabIndex={hasVerticalTrackScroll ? 0 : -1}
+      >
+        <canvas
+          ref={canvasRef}
+          aria-label={hasVerticalTrackScroll
+            ? '音频波形；拖动创建选区，Shift 拖动平移，滚轮滚动声道，Ctrl 或 Command 加滚轮缩放'
+            : '音频波形；拖动创建选区，Shift 拖动平移，滚轮缩放'}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={() => setDrag(null)}
+          onPointerLeave={() => setHoverSample(null)}
+          onWheel={handleWheel}
+        />
+      </div>
+      <canvas ref={axisCanvasRef} className="waveform-axis-canvas" aria-hidden="true" />
       {buffer && hoverSample !== null && (
         <div className="waveform-readout">
           {(hoverSample / buffer.sampleRate).toFixed(3)} s · sample {hoverSample.toLocaleString()}

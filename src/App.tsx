@@ -18,16 +18,26 @@ import {
   Waves,
 } from 'lucide-react'
 import { AudioEngine } from './audio/AudioEngine'
-import { importAudio, type ImportedAudioMetadata } from './audio/importAudio'
+import {
+  DEFAULT_MAX_DECODED_PCM_BYTES,
+  DEFAULT_MAX_ENCODED_AUDIO_BYTES,
+  DEFAULT_MAX_ESTIMATED_WORKING_SET_BYTES,
+  importAudio,
+  type ImportedAudioMetadata,
+} from './audio/importAudio'
 import type { PlaybackSnapshot, SampleRange } from './audio/types'
 import type { StftPreviewResult } from './audio/analysis'
-import type { WaveformPyramid } from './audio/peaks'
+import { mergeWaveformPyramids, type WaveformPyramid } from './audio/peaks'
 import { AnalysisWorkerClient } from './workers/AnalysisWorkerClient'
 import { ExportWorkerClient } from './workers/ExportWorkerClient'
-import { createProjectStore } from './state/projectStore'
+import {
+  createProjectStore,
+  type StoredRecentWorkspace,
+} from './state/projectStore'
 import { AppHeader } from './components/AppHeader'
 import { AssetSidebar, type AssetSummary } from './components/AssetSidebar'
 import { AnalysisControls } from './components/AnalysisControls'
+import { ChannelPanel } from './components/ChannelPanel'
 import { DropOverlay } from './components/DropOverlay'
 import {
   ExportDialog,
@@ -60,6 +70,7 @@ interface RuntimeAsset {
   analysisKey: string | null
   selection: SampleSelection | null
   positionSample: number
+  visibleChannels: number[]
 }
 
 interface AnalysisClients {
@@ -103,10 +114,15 @@ function analysisKey(config: WorkspaceAnalysisConfig, selection: SampleSelection
   })
 }
 
-function copyChannels(buffer: AudioBuffer): Float32Array[] {
+function copyChannels(
+  buffer: AudioBuffer,
+  range?: SampleRange,
+): Float32Array[] {
+  const start = range?.start ?? 0
+  const end = range?.end ?? buffer.length
   return Array.from(
     { length: buffer.numberOfChannels },
-    (_, channel) => buffer.getChannelData(channel).slice(),
+    (_, channel) => buffer.getChannelData(channel).slice(start, end),
   )
 }
 
@@ -115,10 +131,54 @@ function channelMode(
   numberOfChannels: number,
 ): { kind: 'mix' } | { kind: 'channel'; index: number } {
   if (config.channel === 'mix') return { kind: 'mix' }
-  if (config.channel === 'right') {
-    return { kind: 'channel', index: Math.min(1, numberOfChannels - 1) }
+  return {
+    kind: 'channel',
+    index: Math.max(0, Math.min(config.channel, numberOfChannels - 1)),
   }
-  return { kind: 'channel', index: 0 }
+}
+
+function defaultVisibleChannels(numberOfChannels: number): number[] {
+  return Array.from(
+    { length: Math.min(2, Math.max(0, numberOfChannels)) },
+    (_, index) => index,
+  )
+}
+
+function normalizeVisibleChannels(
+  channels: readonly number[] | undefined,
+  numberOfChannels: number,
+): number[] {
+  if (channels === undefined) return defaultVisibleChannels(numberOfChannels)
+  const normalized = [...new Set(channels ?? [])]
+    .filter((index) => Number.isSafeInteger(index) && index >= 0 && index < numberOfChannels)
+    .sort((left, right) => left - right)
+  if (channels.length > 0 && normalized.length === 0) {
+    return defaultVisibleChannels(numberOfChannels)
+  }
+  return normalized
+}
+
+function normalizeConfigChannel(
+  config: WorkspaceAnalysisConfig,
+  numberOfChannels: number,
+): WorkspaceAnalysisConfig {
+  if (
+    config.channel === 'mix' ||
+    (config.channel >= 0 && config.channel < numberOfChannels)
+  ) return config
+  return { ...config, channel: 'mix' }
+}
+
+function matchesStoredAsset(
+  stored: ImportedAudioMetadata | null | undefined,
+  imported: ImportedAudioMetadata,
+): boolean {
+  return stored?.fingerprint === imported.fingerprint
+    && stored.sizeBytes === imported.sizeBytes
+    && stored.lastModified === imported.lastModified
+    && stored.sampleRate === imported.sampleRate
+    && stored.numberOfChannels === imported.numberOfChannels
+    && stored.lengthSamples === imported.lengthSamples
 }
 
 function safeBaseName(name: string): string {
@@ -153,10 +213,15 @@ export function App() {
   const importAbortRef = useRef<AbortController | null>(null)
   const cancelPeakBuildRef = useRef<(() => void) | null>(null)
   const realtimeAnchorRef = useRef({ assetId: '', sample: -1, key: '' })
+  const restoredWorkspaceRef = useRef<StoredRecentWorkspace | null>(null)
+  const workspaceLoadPromiseRef = useRef<Promise<StoredRecentWorkspace | null> | null>(null)
+  const workspaceRestoreAppliedRef = useRef(false)
+  const projectStoreCloseTimerRef = useRef<number | null>(null)
   const waveformControlsRef = useRef<{ fit: () => void; zoomToSelection: () => void } | null>(null)
   const reset3dRef = useRef<(() => void) | null>(null)
   const dragDepthRef = useRef(0)
   const [projectStore] = useState(() => createProjectStore())
+  const [workspaceRestored, setWorkspaceRestored] = useState(false)
 
   const [assets, setAssets] = useState<RuntimeAsset[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -208,25 +273,46 @@ export function App() {
     return exportClientRef.current
   }, [])
 
-  useEffect(() => {
-    let cancelled = false
-    void projectStore.load().then((stored) => {
-      if (!cancelled && stored) setConfig(stored.analysisConfig)
-    })
-    return () => { cancelled = true }
+  const loadRecentWorkspace = useCallback((): Promise<StoredRecentWorkspace | null> => {
+    workspaceLoadPromiseRef.current ??= projectStore.load().catch(() => null)
+    return workspaceLoadPromiseRef.current
   }, [projectStore])
 
+  const applyRestoredWorkspace = useCallback((stored: StoredRecentWorkspace | null) => {
+    if (workspaceRestoreAppliedRef.current) return
+    workspaceRestoreAppliedRef.current = true
+    restoredWorkspaceRef.current = stored
+    if (stored) setConfig(stored.analysisConfig)
+    setWorkspaceRestored(true)
+  }, [])
+
   useEffect(() => {
+    let cancelled = false
+    void loadRecentWorkspace().then((stored) => {
+      if (cancelled) return
+      applyRestoredWorkspace(stored)
+    })
+    return () => { cancelled = true }
+  }, [applyRestoredWorkspace, loadRecentWorkspace])
+
+  useEffect(() => {
+    if (!workspaceRestored) return
     const timeout = window.setTimeout(() => {
+      const pendingRestore = restoredWorkspaceRef.current
       void projectStore.save({
         analysisConfig: config,
-        activeAsset: activeAsset?.metadata ?? null,
-        selection: activeAsset?.selection ?? null,
-        playheadSample: activeAsset ? playback.positionSample : 0,
+        activeAsset: activeAsset?.metadata ?? pendingRestore?.activeAsset ?? null,
+        selection: activeAsset
+          ? activeAsset.selection
+          : (pendingRestore?.selection ?? null),
+        playheadSample: activeAsset
+          ? playback.positionSample
+          : (pendingRestore?.playheadSample ?? 0),
+        visibleChannels: activeAsset?.visibleChannels ?? pendingRestore?.visibleChannels,
       }).catch(() => undefined)
     }, 350)
     return () => window.clearTimeout(timeout)
-  }, [activeAsset, config, playback.positionSample, projectStore])
+  }, [activeAsset, config, playback.positionSample, projectStore, workspaceRestored])
 
   useEffect(() => {
     if (playback.kind !== 'playing') return
@@ -244,13 +330,22 @@ export function App() {
   }, [playback.kind])
 
   useEffect(() => {
+    if (projectStoreCloseTimerRef.current !== null) {
+      window.clearTimeout(projectStoreCloseTimerRef.current)
+      projectStoreCloseTimerRef.current = null
+    }
     return () => {
       unsubscribeEngineRef.current?.()
       clientsRef.current?.peaks.terminate()
       clientsRef.current?.offline.terminate()
       clientsRef.current?.realtime.terminate()
       exportClientRef.current?.terminate()
-      projectStore.close()
+      // React development StrictMode immediately replays effects. Defer the
+      // final IDB close so the replayed setup can retain the same live store.
+      projectStoreCloseTimerRef.current = window.setTimeout(() => {
+        projectStore.close()
+        projectStoreCloseTimerRef.current = null
+      }, 0)
       if (engineRef.current) void engineRef.current.dispose()
     }
   }, [projectStore])
@@ -268,18 +363,31 @@ export function App() {
   ) => {
     const clients = ensureClients()
     const range = selection ?? { start: 0, end: asset.buffer.length }
+    const resultKey = analysisKey(nextConfig, selection)
+    const requestedChannelMode = channelMode(
+      nextConfig,
+      asset.buffer.numberOfChannels,
+    )
+    const analysisChannels = requestedChannelMode.kind === 'mix'
+      ? copyChannels(asset.buffer)
+      : [asset.buffer.getChannelData(requestedChannelMode.index).slice()]
+    const workerChannelMode = requestedChannelMode.kind === 'mix'
+      ? requestedChannelMode
+      : { kind: 'channel' as const, index: 0 }
     setAnalyzing(true)
     setAnalysisProgress(0)
-    setAnalysisStale(false)
+    setAnalysisStale(Boolean(
+      asset.analysis && asset.analysisKey !== resultKey,
+    ))
     const job = clients.offline.startAnalyze(
       {
-        channels: copyChannels(asset.buffer),
+        channels: analysisChannels,
         options: {
           sampleRate: asset.buffer.sampleRate,
           fftSize: nextConfig.fftSize,
           hopSize: Math.round(nextConfig.fftSize * (1 - nextConfig.overlap)),
           window: nextConfig.window,
-          channelMode: channelMode(nextConfig, asset.buffer.numberOfChannels),
+          channelMode: workerChannelMode,
           minDb: nextConfig.minDb,
           maxDb: nextConfig.maxDb,
           range,
@@ -289,10 +397,14 @@ export function App() {
     )
     offlineJobIdRef.current = job.jobId
     try {
-      const result = await job.result
+      const workerResult = await job.result
+      const result: StftPreviewResult = requestedChannelMode.kind === 'mix'
+        ? workerResult
+        : { ...workerResult, channelMode: requestedChannelMode }
       setAssets((current) => current.map((item) => item.id === asset.id
-        ? { ...item, analysis: result, analysisKey: analysisKey(nextConfig, selection) }
+        ? { ...item, analysis: result, analysisKey: resultKey }
         : item))
+      setAnalysisStale(false)
       setStatusMessage(`已完成 ${result.frameCount} 帧 FFT 预览`)
     } catch (error) {
       const name = error instanceof Error ? error.name : ''
@@ -309,12 +421,24 @@ export function App() {
 
   const handleFiles = useCallback(async (fileList: FileList | File[]) => {
     const files = Array.from(fileList)
-    if (files.length === 0 || importing) return
+    if (files.length === 0 || importing || importAbortRef.current) return
     setImporting(true)
     setErrorMessage(null)
     const abortController = new AbortController()
     importAbortRef.current = abortController
+    const wasWorkspaceRestored = workspaceRestored
+    const storedWorkspace = await loadRecentWorkspace()
+    applyRestoredWorkspace(storedWorkspace)
+    const importConfig = wasWorkspaceRestored
+      ? config
+      : (storedWorkspace?.analysisConfig ?? config)
     let lastAsset: RuntimeAsset | null = null
+    let lastAssetExceedsSoftLimit = false
+    let nextAnalysisConfig = importConfig
+    let residentPcmBytes = assets.reduce(
+      (total, asset) => total + asset.metadata.pcmBytes,
+      0,
+    )
     try {
       const engine = ensureEngine()
       const clients = ensureClients()
@@ -322,9 +446,42 @@ export function App() {
         const file = files[index]
         if (!file) continue
         setStatusMessage(`正在导入 ${index + 1}/${files.length}：${file.name}`)
+        const remainingResidentBytes = DEFAULT_MAX_DECODED_PCM_BYTES
+          - residentPcmBytes
+        const remainingWorkingSetBytes = DEFAULT_MAX_ESTIMATED_WORKING_SET_BYTES
+          - residentPcmBytes
+        if (remainingResidentBytes <= 0 || remainingWorkingSetBytes <= 0) {
+          throw new Error('当前工作区 PCM 已达到内存安全上限，请先关闭不需要的音频资源')
+        }
         const imported = await importAudio(file, engine.audioContext, {
           signal: abortController.signal,
+          maxEncodedBytes: Math.min(
+            DEFAULT_MAX_ENCODED_AUDIO_BYTES,
+            remainingWorkingSetBytes,
+          ),
+          maxDecodedPcmBytes: Math.min(
+            DEFAULT_MAX_DECODED_PCM_BYTES,
+            remainingResidentBytes,
+          ),
+          maxEstimatedWorkingSetBytes: remainingWorkingSetBytes,
         })
+        residentPcmBytes += imported.metadata.pcmBytes
+        nextAnalysisConfig = normalizeConfigChannel(
+          importConfig,
+          imported.audioBuffer.numberOfChannels,
+        )
+        setConfig(nextAnalysisConfig)
+        const restored = restoredWorkspaceRef.current
+        const matchingRestore = restored && matchesStoredAsset(
+          restored.activeAsset,
+          imported.metadata,
+        ) ? restored : null
+        const restoredSelection = matchingRestore
+          ? (matchingRestore.selection ?? null)
+          : null
+        const restoredPosition = matchingRestore
+          ? Math.min(matchingRestore.playheadSample ?? 0, imported.audioBuffer.length)
+          : 0
         const asset: RuntimeAsset = {
           id: createId(imported.metadata.fingerprint.slice(0, 12)),
           metadata: imported.metadata,
@@ -332,32 +489,66 @@ export function App() {
           peaks: null,
           analysis: null,
           analysisKey: null,
-          selection: null,
-          positionSample: 0,
+          selection: restoredSelection,
+          positionSample: restoredPosition,
+          visibleChannels: matchingRestore
+            ? normalizeVisibleChannels(
+                matchingRestore.visibleChannels,
+                imported.audioBuffer.numberOfChannels,
+              )
+            : defaultVisibleChannels(imported.audioBuffer.numberOfChannels),
         }
         lastAsset = asset
+        lastAssetExceedsSoftLimit = imported.memory.exceedsSoftLimit
         setAssets((current) => [...current, asset])
         setActiveId(asset.id)
-        engine.load(asset.id, asset.buffer)
+        engine.load(asset.id, asset.buffer, {
+          positionSample: asset.positionSample,
+          selection: asset.selection,
+        })
         setRealtimeResult(null)
         if (imported.memory.exceedsSoftLimit) {
           setStatusMessage(`已导入 ${file.name}；解码 PCM 占用较高，建议缩小分析选区`)
         } else {
           setStatusMessage(`正在生成 ${file.name} 的波形峰值…`)
         }
-        const peakJob = clients.peaks.startBuildPeaks({
-          assetId: asset.id,
-          channels: copyChannels(asset.buffer),
-        })
-        cancelPeakBuildRef.current = peakJob.cancel
-        const pyramid = await peakJob.result
+        const channelPyramids: WaveformPyramid[] = []
+        for (
+          let channelIndex = 0;
+          channelIndex < asset.buffer.numberOfChannels;
+          channelIndex += 1
+        ) {
+          if (abortController.signal.aborted) {
+            throw new DOMException('Import cancelled', 'AbortError')
+          }
+          setStatusMessage(
+            `正在生成 ${file.name} 的波形 · Channel ${channelIndex + 1}/${asset.buffer.numberOfChannels}`,
+          )
+          const peakJob = clients.peaks.startBuildPeaks({
+            assetId: asset.id,
+            channels: [asset.buffer.getChannelData(channelIndex).slice()],
+          })
+          cancelPeakBuildRef.current = peakJob.cancel
+          channelPyramids.push(await peakJob.result)
+        }
         cancelPeakBuildRef.current = null
+        const pyramid = mergeWaveformPyramids(channelPyramids)
         asset.peaks = pyramid
         setAssets((current) => current.map((item) => item.id === asset.id
           ? { ...item, peaks: pyramid }
           : item))
       }
-      if (lastAsset) void runOfflineAnalysis(lastAsset, config, null)
+      if (lastAsset) {
+        if (lastAssetExceedsSoftLimit) {
+          setStatusMessage('波形已就绪；内存占用较高，请缩小选区后手动分析')
+        } else {
+          void runOfflineAnalysis(
+            lastAsset,
+            nextAnalysisConfig,
+            lastAsset.selection,
+          )
+        }
+      }
     } catch (error) {
       const cancelled = abortController.signal.aborted ||
         (error instanceof Error && error.name.includes('Cancelled'))
@@ -365,12 +556,25 @@ export function App() {
         setErrorMessage(error instanceof Error ? error.message : '音频导入失败')
       }
     } finally {
+      if (lastAsset) {
+        restoredWorkspaceRef.current = null
+      }
       if (importAbortRef.current === abortController) importAbortRef.current = null
       cancelPeakBuildRef.current = null
       setImporting(false)
       window.setTimeout(() => setStatusMessage(null), 2_500)
     }
-  }, [config, ensureClients, ensureEngine, importing, runOfflineAnalysis])
+  }, [
+    applyRestoredWorkspace,
+    assets,
+    config,
+    ensureClients,
+    ensureEngine,
+    importing,
+    loadRecentWorkspace,
+    runOfflineAnalysis,
+    workspaceRestored,
+  ])
 
   const cancelImport = useCallback(() => {
     importAbortRef.current?.abort()
@@ -383,6 +587,8 @@ export function App() {
     if (id === activeId) return
     const next = assets.find((asset) => asset.id === id)
     if (!next) return
+    const nextConfig = normalizeConfigChannel(config, next.buffer.numberOfChannels)
+    if (nextConfig !== config) setConfig(nextConfig)
     if (offlineJobIdRef.current) {
       clientsRef.current?.offline.cancel(offlineJobIdRef.current)
       offlineJobIdRef.current = null
@@ -401,7 +607,7 @@ export function App() {
     })
     setActiveId(id)
     setRealtimeResult(null)
-    setAnalysisStale(next.analysisKey !== analysisKey(config, next.selection))
+    setAnalysisStale(next.analysisKey !== analysisKey(nextConfig, next.selection))
   }, [activeId, assets, config, ensureEngine, playback.positionSample, playback.selection])
 
   const removeAsset = useCallback((id: string) => {
@@ -419,12 +625,14 @@ export function App() {
     engine.unload()
     const next = remaining[0]
     if (next) {
+      const nextConfig = normalizeConfigChannel(config, next.buffer.numberOfChannels)
+      if (nextConfig !== config) setConfig(nextConfig)
       engine.load(next.id, next.buffer, {
         positionSample: next.positionSample,
         selection: next.selection,
       })
       setActiveId(next.id)
-      setAnalysisStale(next.analysisKey !== analysisKey(config, next.selection))
+      setAnalysisStale(next.analysisKey !== analysisKey(nextConfig, next.selection))
     } else {
       setActiveId(null)
       setRealtimeResult(null)
@@ -432,8 +640,65 @@ export function App() {
     }
   }, [activeId, assets, config, ensureEngine])
 
+  const toggleChannelVisibility = useCallback((channelIndex: number) => {
+    if (!activeId) return
+    setAssets((current) => current.map((asset) => {
+      if (asset.id !== activeId) return asset
+      const visible = normalizeVisibleChannels(
+        asset.visibleChannels,
+        asset.buffer.numberOfChannels,
+      )
+      if (visible.includes(channelIndex)) {
+        return {
+          ...asset,
+          visibleChannels: visible.filter((index) => index !== channelIndex),
+        }
+      }
+      return {
+        ...asset,
+        visibleChannels: [...visible, channelIndex].sort((left, right) => left - right),
+      }
+    }))
+  }, [activeId])
+
+  const isolateChannel = useCallback((channelIndex: number) => {
+    if (!activeId) return
+    setAssets((current) => current.map((asset) => asset.id === activeId
+      ? { ...asset, visibleChannels: [channelIndex] }
+      : asset))
+  }, [activeId])
+
+  const showAllChannels = useCallback(() => {
+    if (!activeId) return
+    setAssets((current) => current.map((asset) => asset.id === activeId
+      ? {
+          ...asset,
+          visibleChannels: Array.from(
+            { length: asset.buffer.numberOfChannels },
+            (_, index) => index,
+          ),
+        }
+      : asset))
+  }, [activeId])
+
+  const resetVisibleChannels = useCallback(() => {
+    if (!activeId) return
+    setAssets((current) => current.map((asset) => asset.id === activeId
+      ? {
+          ...asset,
+          visibleChannels: defaultVisibleChannels(asset.buffer.numberOfChannels),
+        }
+      : asset))
+  }, [activeId])
+
   const updateSelection = useCallback((selection: SampleSelection | null) => {
     if (!activeAsset) return
+    if (offlineJobIdRef.current) {
+      clientsRef.current?.offline.cancel(offlineJobIdRef.current)
+      offlineJobIdRef.current = null
+      setAnalyzing(false)
+      setAnalysisProgress(0)
+    }
     const engine = ensureEngine()
     if (selection && selection.end > selection.start) engine.setSelection(selection)
     else engine.clearSelection()
@@ -521,12 +786,19 @@ export function App() {
       setErrorMessage('dBFS 范围必须满足：最低值 < 最高值 ≤ 0')
       return
     }
+    const nextKey = analysisKey(next, activeAsset?.selection ?? null)
+    const currentKey = analysisKey(config, activeAsset?.selection ?? null)
+    if (nextKey !== currentKey && offlineJobIdRef.current) {
+      clientsRef.current?.offline.cancel(offlineJobIdRef.current)
+      offlineJobIdRef.current = null
+      setAnalyzing(false)
+      setAnalysisProgress(0)
+    }
     setConfig(next)
-    if (
-      activeAsset?.analysis &&
-      activeAsset.analysisKey !== analysisKey(next, activeAsset.selection)
-    ) setAnalysisStale(true)
-  }, [activeAsset])
+    setAnalysisStale(Boolean(
+      activeAsset?.analysis && activeAsset.analysisKey !== nextKey,
+    ))
+  }, [activeAsset, config])
 
   const handleWaveformControlsReady = useCallback((controls: {
     fit: () => void
@@ -564,14 +836,35 @@ export function App() {
     const range: SampleRange | undefined = request.scope === 'selection' && activeAsset.selection
       ? activeAsset.selection
       : undefined
+    const frameCount = range
+      ? range.end - range.start
+      : activeAsset.buffer.length
+    const bytesPerSample = request.format === 'pcm16'
+      ? 2
+      : request.format === 'pcm24'
+        ? 3
+        : 4
+    const copiedPcmBytes = frameCount
+      * activeAsset.buffer.numberOfChannels
+      * Float32Array.BYTES_PER_ELEMENT
+    const residentPcmBytes = assets.reduce(
+      (total, asset) => total + asset.metadata.pcmBytes,
+      0,
+    )
+    const estimatedWorkingSetBytes = residentPcmBytes
+      + copiedPcmBytes
+      + frameCount * activeAsset.buffer.numberOfChannels * bytesPerSample
+    if (estimatedWorkingSetBytes > DEFAULT_MAX_ESTIMATED_WORKING_SET_BYTES) {
+      setErrorMessage('本次导出预计超过 1 GiB 工作内存，请缩小选区或降低采样格式')
+      return
+    }
     setExporting(true)
     setExportProgress(0)
     try {
       const job = ensureExportClient().startEncodeWav({
         sampleRate: activeAsset.buffer.sampleRate,
-        channels: copyChannels(activeAsset.buffer),
+        channels: copyChannels(activeAsset.buffer, range),
         format: request.format,
-        range,
         normalize: request.normalize,
         targetPeakDbfs: request.targetPeakDbfs,
       }, { onProgress: ({ ratio }) => setExportProgress(ratio) })
@@ -590,7 +883,7 @@ export function App() {
       setExporting(false)
       setExportProgress(0)
     }
-  }, [activeAsset, ensureExportClient])
+  }, [activeAsset, assets, ensureExportClient])
 
   const cancelExport = useCallback(() => {
     cancelExportRef.current?.()
@@ -731,6 +1024,17 @@ export function App() {
           onImport={() => fileInputRef.current?.click()}
           onActivate={activateAsset}
           onRemove={removeAsset}
+          channelPanel={activeAsset ? (
+            <ChannelPanel
+              channelCount={activeAsset.buffer.numberOfChannels}
+              visibleChannels={activeAsset.visibleChannels}
+              analysisChannel={config.channel}
+              onToggleVisibility={toggleChannelVisibility}
+              onIsolate={isolateChannel}
+              onShowAll={showAllChannels}
+              onResetVisible={resetVisibleChannels}
+            />
+          ) : null}
         />
 
         <section className="workspace">
@@ -748,6 +1052,7 @@ export function App() {
                 key={activeAsset?.id ?? 'empty'}
                 buffer={activeAsset?.buffer ?? null}
                 peaks={activeAsset?.peaks ?? null}
+                visibleChannels={activeAsset?.visibleChannels ?? []}
                 currentSample={playback.positionSample}
                 selection={activeAsset?.selection ?? null}
                 onSeek={seekSample}
@@ -822,7 +1127,8 @@ export function App() {
         <AnalysisControls
           config={config}
           sampleRate={activeAsset?.buffer.sampleRate ?? null}
-          disabled={!activeAsset}
+          numberOfChannels={activeAsset?.buffer.numberOfChannels ?? 0}
+          disabled={!activeAsset || importing}
           analyzing={analyzing}
           progress={analysisProgress}
           mode3d={mode3d}

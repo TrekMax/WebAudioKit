@@ -1,4 +1,5 @@
 import { FileAudio2, HardDrive, Info, Music2, Plus, Radio, X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { formatTime } from '../visualization/format'
 
 export interface AssetSummary {
@@ -17,6 +18,7 @@ interface AssetSidebarProps {
   onImport: () => void
   onActivate: (id: string) => void
   onRemove: (id: string) => void
+  channelPanel?: ReactNode
 }
 
 function formatBytes(bytes: number): string {
@@ -25,7 +27,13 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 ** 2).toFixed(1)} MB`
 }
 
-export function AssetSidebar({ assets, onImport, onActivate, onRemove }: AssetSidebarProps) {
+export function AssetSidebar({
+  assets,
+  onImport,
+  onActivate,
+  onRemove,
+  channelPanel,
+}: AssetSidebarProps) {
   const active = assets.find((asset) => asset.active)
   return (
     <aside className="asset-sidebar panel-surface">
@@ -60,6 +68,7 @@ export function AssetSidebar({ assets, onImport, onActivate, onRemove }: AssetSi
           </div>
         ))}
       </div>
+      {channelPanel}
       <div className="sidebar-spacer" />
       {active && (
         <section className="asset-metadata">

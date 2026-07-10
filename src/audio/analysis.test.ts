@@ -153,6 +153,27 @@ describe('channel mixing and STFT previews', () => {
     expect(result.valuesDbfs[32]).toBeCloseTo(amplitudeToDbfs(0.5), 3)
   })
 
+  it('analyzes an arbitrary eighth source channel without mixing other tracks', () => {
+    const fftSize = 512
+    const channels = Array.from(
+      { length: 8 },
+      (_, channelIndex) => sineWave(fftSize, 8 * (channelIndex + 1), 0.5),
+    )
+    const result = computeStftPreview(channels, {
+      sampleRate: 48_000,
+      fftSize,
+      hopSize: fftSize,
+      frameCount: 1,
+      channelMode: { kind: 'channel', index: 7 },
+      minDb: -120,
+      maxDb: 0,
+    })
+
+    expect(result.channelMode).toEqual({ kind: 'channel', index: 7 })
+    expect(indexOfMaximum(result.valuesDbfs)).toBe(64)
+    expect(result.valuesDbfs[64]).toBeCloseTo(amplitudeToDbfs(0.5), 3)
+  })
+
   it('bounds an implicit whole-range preview while retaining source frame indices', () => {
     const hopSize = 2
     const totalFrames = DEFAULT_STFT_PREVIEW_FRAME_LIMIT + 44

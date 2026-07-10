@@ -21,8 +21,14 @@ const ACTIVE_ASSET: ImportedAudioMetadata = {
   pcmBytes: 96_000,
 }
 
+const EIGHT_CHANNEL_ASSET: ImportedAudioMetadata = {
+  ...ACTIVE_ASSET,
+  numberOfChannels: 8,
+  pcmBytes: 384_000,
+}
+
 describe('ProjectStore', () => {
-  it('saves a schema-v1 serializable snapshot in memory when IndexedDB is unavailable', async () => {
+  it('saves a schema-v2 serializable snapshot in memory when IndexedDB is unavailable', async () => {
     const store = createProjectStore({
       indexedDB: null,
       now: () => 1_000,
@@ -33,6 +39,7 @@ describe('ProjectStore', () => {
       activeAsset: ACTIVE_ASSET,
       selection: { start: 100, end: 200 },
       playheadSample: 150,
+      visibleChannels: [1, 0, 1],
     })
 
     expect(store.persistenceMode).toBe('memory')
@@ -43,6 +50,7 @@ describe('ProjectStore', () => {
       activeAsset: ACTIVE_ASSET,
       selection: { start: 100, end: 200 },
       playheadSample: 150,
+      visibleChannels: [0, 1],
     })
     await expect(store.load()).resolves.toEqual(saved)
   })
@@ -78,14 +86,17 @@ describe('ProjectStore', () => {
       analysisConfig: DEFAULT_ANALYSIS_CONFIG,
       activeAsset: ACTIVE_ASSET,
       selection: { start: 20, end: 40 },
+      visibleChannels: [1, 0],
     })
 
     ;(saved.analysisConfig as { fftSize: number }).fftSize = 512
     ;(saved.selection as { start: number }).start = 0
+    saved.visibleChannels?.push(7)
 
     await expect(store.load()).resolves.toMatchObject({
       analysisConfig: { fftSize: 2048 },
       selection: { start: 20, end: 40 },
+      visibleChannels: [0, 1],
     })
     await expect(
       store.save({
@@ -96,7 +107,112 @@ describe('ProjectStore', () => {
     ).rejects.toThrow('sample position exceeds active asset length')
   })
 
-  it('round-trips and clears the recent workspace through IndexedDB schema v1', async () => {
+  it('accepts an eighth-channel analysis index', async () => {
+    const store = createProjectStore({ indexedDB: null, now: () => 3_500 })
+
+    const saved = await store.save({
+      analysisConfig: { ...DEFAULT_ANALYSIS_CONFIG, channel: 7 },
+      activeAsset: EIGHT_CHANNEL_ASSET,
+      visibleChannels: [7],
+    })
+
+    expect(saved.analysisConfig.channel).toBe(7)
+    expect(saved.visibleChannels).toEqual([7])
+  })
+
+  it('normalizes duplicate visible channels and rejects invalid indexes', async () => {
+    const store = createProjectStore({ indexedDB: null, now: () => 3_600 })
+
+    const saved = await store.save({
+      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+      visibleChannels: [7, 2, 7, 0, 2],
+    })
+    expect(saved.visibleChannels).toEqual([0, 2, 7])
+    await expect(store.save({
+      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+      visibleChannels: [],
+    })).resolves.toMatchObject({ visibleChannels: [] })
+
+    for (const visibleChannels of [
+      [-1],
+      [1.5],
+      [Number.MAX_SAFE_INTEGER + 1],
+    ]) {
+      await expect(
+        store.save({
+          analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+          visibleChannels,
+        }),
+      ).rejects.toThrow(
+        'visibleChannels must contain only non-negative safe integers',
+      )
+    }
+  })
+
+  it('rejects invalid channel data stored with schema v2', async () => {
+    const invalidChannelFactory = new FakeIndexedDbFactory()
+    invalidChannelFactory.hasProjectsStore = true
+    invalidChannelFactory.records.set('recent-workspace', {
+      schemaVersion: PROJECT_STORE_SCHEMA_VERSION,
+      updatedAt: 3_700,
+      analysisConfig: { ...DEFAULT_ANALYSIS_CONFIG, channel: -1 },
+    })
+    const invalidChannelStore = createProjectStore({
+      indexedDB: invalidChannelFactory.asFactory(),
+      databaseName: 'invalid-analysis-channel-test',
+    })
+    await expect(invalidChannelStore.load()).resolves.toBeNull()
+
+    const invalidVisibleFactory = new FakeIndexedDbFactory()
+    invalidVisibleFactory.hasProjectsStore = true
+    invalidVisibleFactory.records.set('recent-workspace', {
+      schemaVersion: PROJECT_STORE_SCHEMA_VERSION,
+      updatedAt: 3_800,
+      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
+      visibleChannels: [0, 1.5],
+    })
+    const invalidVisibleStore = createProjectStore({
+      indexedDB: invalidVisibleFactory.asFactory(),
+      databaseName: 'invalid-visible-channels-test',
+    })
+    await expect(invalidVisibleStore.load()).resolves.toBeNull()
+  })
+
+  it.each([
+    ['mix', 'mix'],
+    ['left', 0],
+    ['right', 1],
+  ] as const)(
+    'migrates schema-v1 channel %s to schema v2',
+    async (legacyChannel, expectedChannel) => {
+      const indexedDB = new FakeIndexedDbFactory()
+      indexedDB.hasProjectsStore = true
+      indexedDB.records.set('recent-workspace', {
+        schemaVersion: 1,
+        updatedAt: 3_900,
+        analysisConfig: {
+          ...DEFAULT_ANALYSIS_CONFIG,
+          channel: legacyChannel,
+        },
+      })
+      const store = createProjectStore({
+        indexedDB: indexedDB.asFactory(),
+        databaseName: `schema-v1-${legacyChannel}-migration-test`,
+      })
+
+      await expect(store.load()).resolves.toMatchObject({
+        schemaVersion: PROJECT_STORE_SCHEMA_VERSION,
+        analysisConfig: { channel: expectedChannel },
+      })
+      expect(indexedDB.records.get('recent-workspace')).toMatchObject({
+        schemaVersion: PROJECT_STORE_SCHEMA_VERSION,
+        analysisConfig: { channel: expectedChannel },
+      })
+      expect(indexedDB.openVersions).toEqual([PROJECT_STORE_SCHEMA_VERSION])
+    },
+  )
+
+  it('round-trips and clears multichannel preferences through IndexedDB schema v2', async () => {
     const indexedDB = new FakeIndexedDbFactory()
     const firstStore = createProjectStore({
       indexedDB: indexedDB.asFactory(),
@@ -104,10 +220,11 @@ describe('ProjectStore', () => {
       now: () => 4_000,
     })
     const expected = await firstStore.save({
-      analysisConfig: DEFAULT_ANALYSIS_CONFIG,
-      activeAsset: ACTIVE_ASSET,
+      analysisConfig: { ...DEFAULT_ANALYSIS_CONFIG, channel: 7 },
+      activeAsset: EIGHT_CHANNEL_ASSET,
       selection: null,
       playheadSample: 64,
+      visibleChannels: [7, 0, 3, 7],
     })
     firstStore.close()
 
@@ -116,7 +233,8 @@ describe('ProjectStore', () => {
       databaseName: 'project-store-test',
     })
     await expect(secondStore.load()).resolves.toEqual(expected)
-    expect(indexedDB.openVersions).toEqual([1, 1])
+    expect(expected.visibleChannels).toEqual([0, 3, 7])
+    expect(indexedDB.openVersions).toEqual([2, 2])
 
     await secondStore.clear()
     secondStore.close()

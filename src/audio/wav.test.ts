@@ -93,6 +93,24 @@ describe('encodeWav', () => {
     expect(view.getFloat32(56, true)).toBe(-1.5)
   })
 
+  it('preserves all eight source channels and their interleaved order', () => {
+    const source = pcm(Array.from(
+      { length: 8 },
+      (_, channelIndex) => [channelIndex / 10],
+    ))
+    const view = new DataView(encodeWav(source, { format: 'float32' }))
+
+    expect(view.getUint16(22, true)).toBe(8)
+    expect(view.getUint16(32, true)).toBe(32)
+    expect(view.getUint32(40, true)).toBe(32)
+    expect(Array.from(
+      { length: 8 },
+      (_, channelIndex) => view.getFloat32(44 + channelIndex * 4, true),
+    )).toEqual(Array.from({ length: 8 }, (_, channelIndex) => (
+      expect.closeTo(channelIndex / 10, 6)
+    )))
+  })
+
   it('normalizes all channels against the selected global peak', () => {
     const source = pcm([
       [0.1, 0.25, 0.1],

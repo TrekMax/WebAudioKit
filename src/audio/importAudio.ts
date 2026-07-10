@@ -1,7 +1,10 @@
 const FINGERPRINT_CHUNK_BYTES = 64 * 1024
 
 export const DEFAULT_MAX_ENCODED_AUDIO_BYTES = 1024 * 1024 * 1024
-export const DEFAULT_MAX_DECODED_PCM_BYTES = 1024 * 1024 * 1024
+// The current Worker protocols transfer one full PCM copy. Keeping decoded PCM
+// at or below 512 MiB bounds source + Worker input to roughly 1 GiB.
+export const DEFAULT_MAX_DECODED_PCM_BYTES = 512 * 1024 * 1024
+export const DEFAULT_MAX_ESTIMATED_WORKING_SET_BYTES = 1024 * 1024 * 1024
 export const DEFAULT_SOFT_PCM_LIMIT_BYTES = 384 * 1024 * 1024
 
 export type AudioImportStage =
@@ -29,6 +32,7 @@ export interface AudioImportErrorDetails {
   readonly fileSizeBytes?: number
   readonly limitBytes?: number
   readonly decodedPcmBytes?: number
+  readonly estimatedWorkingSetBytes?: number
 }
 
 export interface SerializedAudioImportError {
@@ -108,6 +112,7 @@ export interface ImportAudioOptions {
   readonly signal?: AbortSignal
   readonly maxEncodedBytes?: number
   readonly maxDecodedPcmBytes?: number
+  readonly maxEstimatedWorkingSetBytes?: number
   readonly softPcmLimitBytes?: number
   /** Test/embedded-environment override; defaults to globalThis.crypto. */
   readonly cryptoProvider?: Pick<Crypto, 'subtle'>
@@ -297,10 +302,16 @@ export async function importAudio(
     options.maxEncodedBytes ?? DEFAULT_MAX_ENCODED_AUDIO_BYTES
   const maxDecodedPcmBytes =
     options.maxDecodedPcmBytes ?? DEFAULT_MAX_DECODED_PCM_BYTES
+  const maxEstimatedWorkingSetBytes = options.maxEstimatedWorkingSetBytes
+    ?? DEFAULT_MAX_ESTIMATED_WORKING_SET_BYTES
   const softPcmLimitBytes =
     options.softPcmLimitBytes ?? DEFAULT_SOFT_PCM_LIMIT_BYTES
 
   assertPositiveSafeByteLimit(maxDecodedPcmBytes, 'maxDecodedPcmBytes')
+  assertPositiveSafeByteLimit(
+    maxEstimatedWorkingSetBytes,
+    'maxEstimatedWorkingSetBytes',
+  )
   assertPositiveSafeByteLimit(softPcmLimitBytes, 'softPcmLimitBytes')
   const fileMetadata = validateAudioFile(file, maxEncodedBytes)
   throwIfAborted(options.signal, 'validation')
@@ -389,12 +400,28 @@ export async function importAudio(
     )
   }
 
+  const estimatedWorkingSetBytes = fileMetadata.sizeBytes + decodedPcmBytes * 2
+  if (estimatedWorkingSetBytes > maxEstimatedWorkingSetBytes) {
+    throw importFailure(
+      'IMPORT_PCM_TOO_LARGE',
+      'preparing',
+      '音频任务的预计工作内存超过安全上限，未加载到工作区。',
+      false,
+      {
+        fileSizeBytes: fileMetadata.sizeBytes,
+        decodedPcmBytes,
+        estimatedWorkingSetBytes,
+        limitBytes: maxEstimatedWorkingSetBytes,
+      },
+    )
+  }
+
   const memory: PcmMemoryEstimate = {
     encodedBytes: fileMetadata.sizeBytes,
     decodedPcmBytes,
-    estimatedWorkingSetBytes: fileMetadata.sizeBytes + decodedPcmBytes,
+    estimatedWorkingSetBytes,
     softLimitBytes: softPcmLimitBytes,
-    exceedsSoftLimit: decodedPcmBytes > softPcmLimitBytes,
+    exceedsSoftLimit: estimatedWorkingSetBytes > softPcmLimitBytes,
   }
 
   return {

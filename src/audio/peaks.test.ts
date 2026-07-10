@@ -4,6 +4,7 @@ import {
   DEFAULT_PEAK_BLOCK_SIZE,
   PeakBuildCancelledError,
   buildPeakPyramid,
+  mergeWaveformPyramids,
 } from './peaks'
 
 describe('waveform peak pyramid', () => {
@@ -69,6 +70,22 @@ describe('waveform peak pyramid', () => {
     expect(overview?.channels[0]?.maxs[0]).toBeCloseTo(0.9)
     expect(overview?.channels[1]?.mins[0]).toBe(-0.25)
     expect(overview?.channels[1]?.maxs[0]).toBe(0.625)
+  })
+
+  it('merges independently built channels into their original track order', async () => {
+    const first = await buildPeakPyramid(
+      [Float32Array.of(-1, 0.5)],
+      { assetId: 'split', baseBlockSize: 1 },
+    )
+    const second = await buildPeakPyramid(
+      [Float32Array.of(-0.25, 0.75)],
+      { assetId: 'split', baseBlockSize: 1 },
+    )
+    const merged = mergeWaveformPyramids([first, second])
+
+    expect(merged.levels[0]?.channels).toHaveLength(2)
+    expect(Array.from(merged.levels[0]?.channels[0]?.maxs ?? [])).toEqual([-1, 0.5])
+    expect(Array.from(merged.levels[0]?.channels[1]?.maxs ?? [])).toEqual([-0.25, 0.75])
   })
 
   it('sanitizes non-finite decoded samples at the analysis boundary', async () => {

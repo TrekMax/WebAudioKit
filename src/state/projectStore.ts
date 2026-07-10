@@ -4,7 +4,7 @@ import type {
   WorkspaceAnalysisConfig,
 } from '../workspaceTypes'
 
-export const PROJECT_STORE_SCHEMA_VERSION = 1 as const
+export const PROJECT_STORE_SCHEMA_VERSION = 2 as const
 export const PROJECT_STORE_DATABASE_NAME = 'webaudio-kit'
 
 const PROJECTS_OBJECT_STORE = 'projects'
@@ -15,6 +15,7 @@ export interface RecentWorkspacePreferences {
   readonly activeAsset?: ImportedAudioMetadata | null
   readonly selection?: SampleSelection | null
   readonly playheadSample?: number
+  readonly visibleChannels?: number[]
 }
 
 export interface StoredRecentWorkspace extends RecentWorkspacePreferences {
@@ -102,6 +103,9 @@ export class ProjectStore {
       }
 
       this.memorySnapshot = cloneStoredSnapshot(snapshot)
+      if (isRecord(storedValue) && storedValue.schemaVersion === 1) {
+        await putValue(database, snapshot)
+      }
       return cloneStoredSnapshot(snapshot)
     } catch {
       this.disablePersistence()
@@ -217,6 +221,16 @@ function createStoredSnapshot(
     Object.assign(snapshot, { playheadSample })
   }
 
+  if (preferences.visibleChannels !== undefined) {
+    const visibleChannels = parseVisibleChannels(preferences.visibleChannels)
+    if (!visibleChannels) {
+      throw new RangeError(
+        'visibleChannels must contain only non-negative safe integers',
+      )
+    }
+    Object.assign(snapshot, { visibleChannels })
+  }
+
   return snapshot
 }
 
@@ -225,14 +239,18 @@ function parseStoredSnapshot(value: unknown): StoredRecentWorkspace | null {
     return null
   }
   if (
-    value.schemaVersion !== PROJECT_STORE_SCHEMA_VERSION ||
+    !(value.schemaVersion === 1 ||
+      value.schemaVersion === PROJECT_STORE_SCHEMA_VERSION) ||
     !Number.isSafeInteger(value.updatedAt) ||
     (value.updatedAt as number) < 0
   ) {
     return null
   }
 
-  const analysisConfig = parseAnalysisConfig(value.analysisConfig)
+  const analysisConfig =
+    value.schemaVersion === 1
+      ? parseLegacyAnalysisConfig(value.analysisConfig)
+      : parseAnalysisConfig(value.analysisConfig)
   if (!analysisConfig) {
     return null
   }
@@ -278,6 +296,17 @@ function parseStoredSnapshot(value: unknown): StoredRecentWorkspace | null {
     Object.assign(snapshot, { playheadSample })
   }
 
+  if (
+    value.schemaVersion === PROJECT_STORE_SCHEMA_VERSION &&
+    'visibleChannels' in value
+  ) {
+    const visibleChannels = parseVisibleChannels(value.visibleChannels)
+    if (!visibleChannels) {
+      return null
+    }
+    Object.assign(snapshot, { visibleChannels })
+  }
+
   return snapshot
 }
 
@@ -289,14 +318,14 @@ function parseAnalysisConfig(value: unknown): WorkspaceAnalysisConfig | null {
   const fftSizes = [512, 1024, 2048, 4096, 8192, 16384, 32768] as const
   const overlaps = [0, 0.5, 0.75, 0.875] as const
   const windows = ['hann', 'hamming', 'blackman'] as const
-  const channels = ['mix', 'left', 'right'] as const
   const frequencyScales = ['linear', 'log'] as const
+  const channel = parseAnalysisChannel(value.channel)
 
   if (
     !includesValue(fftSizes, value.fftSize) ||
     !includesValue(windows, value.window) ||
     !includesValue(overlaps, value.overlap) ||
-    !includesValue(channels, value.channel) ||
+    channel === null ||
     !includesValue(frequencyScales, value.frequencyScale) ||
     !Number.isFinite(value.minDb) ||
     !Number.isFinite(value.maxDb) ||
@@ -310,11 +339,57 @@ function parseAnalysisConfig(value: unknown): WorkspaceAnalysisConfig | null {
     fftSize: value.fftSize,
     window: value.window,
     overlap: value.overlap,
-    channel: value.channel,
+    channel,
     frequencyScale: value.frequencyScale,
     minDb: value.minDb as number,
     maxDb: value.maxDb as number,
   }
+}
+
+function parseLegacyAnalysisConfig(
+  value: unknown,
+): WorkspaceAnalysisConfig | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const legacyChannel = value.channel
+  if (!includesValue(['mix', 'left', 'right'] as const, legacyChannel)) {
+    return null
+  }
+
+  return parseAnalysisConfig({
+    ...value,
+    channel:
+      legacyChannel === 'left'
+        ? 0
+        : legacyChannel === 'right'
+          ? 1
+          : 'mix',
+  })
+}
+
+function parseAnalysisChannel(value: unknown): 'mix' | number | null {
+  if (value === 'mix') {
+    return value
+  }
+  return isNonNegativeSafeInteger(value) ? value : null
+}
+
+function parseVisibleChannels(value: unknown): number[] | null {
+  if (!Array.isArray(value)) {
+    return null
+  }
+
+  const channels: number[] = []
+  for (const channel of value) {
+    if (!isNonNegativeSafeInteger(channel)) {
+      return null
+    }
+    channels.push(channel)
+  }
+
+  return [...new Set(channels)].sort((left, right) => left - right)
 }
 
 function parseActiveAsset(value: unknown): ImportedAudioMetadata | null {
@@ -413,6 +488,9 @@ function cloneStoredSnapshot(
       : {}),
     ...('playheadSample' in snapshot
       ? { playheadSample: snapshot.playheadSample }
+      : {}),
+    ...('visibleChannels' in snapshot
+      ? { visibleChannels: [...(snapshot.visibleChannels ?? [])] }
       : {}),
   }
 }

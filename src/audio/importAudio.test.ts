@@ -135,7 +135,7 @@ describe('audio import', () => {
     const context = new FakeDecodeContext(audioBuffer)
 
     const imported = await importAudio(file, asDecodeContext(context), {
-      softPcmLimitBytes: 90_000,
+      softPcmLimitBytes: 150_000,
     })
 
     expect(context.decodedInput?.byteLength).toBe(encodedBytes.byteLength)
@@ -156,8 +156,8 @@ describe('audio import', () => {
     expect(imported.memory).toEqual({
       encodedBytes: 8,
       decodedPcmBytes: 96_000,
-      estimatedWorkingSetBytes: 96_008,
-      softLimitBytes: 90_000,
+      estimatedWorkingSetBytes: 192_008,
+      softLimitBytes: 150_000,
       exceedsSoftLimit: true,
     })
   })
@@ -199,6 +199,22 @@ describe('audio import', () => {
       details: {
         decodedPcmBytes: 96_000,
         limitBytes: 95_999,
+      },
+    })
+
+    await expect(
+      importAudio(
+        new File([Uint8Array.of(1)], 'working-set.wav'),
+        asDecodeContext(context),
+        { maxEstimatedWorkingSetBytes: 192_000 },
+      ),
+    ).rejects.toMatchObject({
+      code: 'IMPORT_PCM_TOO_LARGE',
+      stage: 'preparing',
+      details: {
+        decodedPcmBytes: 96_000,
+        estimatedWorkingSetBytes: 192_001,
+        limitBytes: 192_000,
       },
     })
   })
