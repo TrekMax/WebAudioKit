@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -12,6 +12,7 @@ import {
   Trash2,
   Volume2,
   Waves,
+  X,
 } from 'lucide-react'
 
 import {
@@ -24,6 +25,10 @@ import {
 } from '../audio/filterGraph'
 import type { StftPreviewResult } from '../audio/analysis'
 import { FilterTrackPreview } from './FilterTrackPreview'
+import {
+  calculateFloatingInspectorPosition,
+  type FloatingInspectorPosition,
+} from './floatingInspector'
 
 interface FilterLabProps {
   readonly filters: readonly FilterNodeConfig[]
@@ -41,6 +46,8 @@ interface FilterLabProps {
 }
 
 const FILTER_TYPES = Object.keys(FILTER_DEFINITIONS) as FilterKind[]
+const FLOATING_INSPECTOR_GAP = 12
+const FLOATING_INSPECTOR_WIDTH = 300
 
 function createFilterId(): string {
   return `filter-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
@@ -70,14 +77,23 @@ export function FilterLab({
   onFiltersChange,
   onAuditionModeChange,
 }: FilterLabProps) {
+  const gridRef = useRef<HTMLElement>(null)
+  const graphPanelRef = useRef<HTMLElement>(null)
+  const inspectorRef = useRef<HTMLElement>(null)
+  const nodeRefs = useRef(new Map<string, HTMLButtonElement>())
   const [selectedId, setSelectedId] = useState<string | null>(filters[0]?.id ?? null)
+  const [inspectorPosition, setInspectorPosition] = useState<FloatingInspectorPosition>({
+    left: FLOATING_INSPECTOR_GAP,
+    top: 70,
+  })
   const effectiveSelectedId = selectedId && filters.some((filter) => filter.id === selectedId)
     ? selectedId
-    : (filters[0]?.id ?? null)
+    : null
   const selected = useMemo(
     () => filters.find((filter) => filter.id === effectiveSelectedId) ?? null,
     [effectiveSelectedId, filters],
   )
+  const nodeLayoutRevision = filters.map((filter) => filter.id).join('|')
   const activeCount = filters.filter((filter) => filter.enabled).length
   const nyquist = sampleRate ? sampleRate / 2 : 24_000
   const maximumFrequency = Math.min(96_000, Math.max(20, nyquist))
@@ -89,6 +105,56 @@ export function FilterLab({
         ? '上采样'
         : '等采样率'
     : null
+
+  const updateInspectorPosition = useCallback(() => {
+    if (!effectiveSelectedId) return
+    const grid = gridRef.current
+    const graphPanel = graphPanelRef.current
+    const node = nodeRefs.current.get(effectiveSelectedId)
+    if (!grid || !graphPanel || !node) return
+    const gridRect = grid.getBoundingClientRect()
+    const panelRect = graphPanel.getBoundingClientRect()
+    const nodeRect = node.getBoundingClientRect()
+    const inspectorWidth = inspectorRef.current?.offsetWidth ?? FLOATING_INSPECTOR_WIDTH
+    const inspectorHeight = inspectorRef.current?.offsetHeight ?? 420
+    const localPosition = calculateFloatingInspectorPosition(
+      {
+        left: nodeRect.left - panelRect.left,
+        right: nodeRect.right - panelRect.left,
+        top: nodeRect.top - panelRect.top,
+      },
+      { width: panelRect.width, height: panelRect.height },
+      { width: inspectorWidth, height: inspectorHeight },
+      FLOATING_INSPECTOR_GAP,
+    )
+    const left = panelRect.left - gridRect.left + localPosition.left
+    const top = panelRect.top - gridRect.top + localPosition.top
+    setInspectorPosition((position) => (
+      Math.abs(position.left - left) < 0.5 && Math.abs(position.top - top) < 0.5
+        ? position
+        : { left, top }
+    ))
+  }, [effectiveSelectedId])
+
+  useLayoutEffect(() => {
+    updateInspectorPosition()
+    const frame = window.requestAnimationFrame(updateInspectorPosition)
+    return () => window.cancelAnimationFrame(frame)
+  }, [nodeLayoutRevision, selected?.type, updateInspectorPosition])
+
+  useEffect(() => {
+    window.addEventListener('resize', updateInspectorPosition)
+    return () => window.removeEventListener('resize', updateInspectorPosition)
+  }, [updateInspectorPosition])
+
+  useEffect(() => {
+    if (!selected) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelectedId(null)
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [selected])
 
   const addFilter = (type: FilterKind) => {
     if (filters.length >= MAX_FILTER_NODES) return
@@ -152,7 +218,7 @@ export function FilterLab({
         </div>
       </header>
 
-      <section className="filter-lab-grid">
+      <section className="filter-lab-grid" ref={gridRef}>
         <aside className="filter-palette panel-surface" aria-label="音频处理节点库">
           <div className="filter-pane-heading">
             <span className="eyebrow">NODE LIBRARY</span>
@@ -178,7 +244,7 @@ export function FilterLab({
           <p className="filter-pane-note">最多 {MAX_FILTER_NODES} 个节点。信号按画布中的顺序从左到右处理。</p>
         </aside>
 
-        <section className="filter-graph-panel panel-surface">
+        <section className="filter-graph-panel panel-surface" ref={graphPanelRef}>
           <div className="filter-graph-toolbar">
             <div>
               <span className="eyebrow">SERIAL SIGNAL GRAPH</span>
@@ -192,7 +258,14 @@ export function FilterLab({
             ><RotateCcw size={13} /> 清空链路</button>
           </div>
 
-          <div className="filter-graph-canvas" aria-label="串行滤波节点图">
+          <div
+            className="filter-graph-canvas"
+            aria-label="串行滤波节点图"
+            onScroll={updateInspectorPosition}
+            onClick={(event) => {
+              if (!(event.target as Element).closest('.filter-node')) setSelectedId(null)
+            }}
+          >
             <div className="signal-terminal input"><AudioWaveform size={18} /><strong>输入</strong><small>原始 PCM</small></div>
             <span className="signal-connector"><Cable size={15} /></span>
             {filters.map((filter, index) => {
@@ -200,9 +273,15 @@ export function FilterLab({
               return (
                 <div className="filter-node-wrap" key={filter.id}>
                   <button
+                    ref={(node) => {
+                      if (node) nodeRefs.current.set(filter.id, node)
+                      else nodeRefs.current.delete(filter.id)
+                    }}
                     type="button"
                     className={`filter-node ${effectiveSelectedId === filter.id ? 'selected' : ''} ${filter.enabled ? '' : 'bypassed'}`}
                     aria-pressed={effectiveSelectedId === filter.id}
+                    aria-expanded={effectiveSelectedId === filter.id}
+                    aria-controls={effectiveSelectedId === filter.id ? 'floating-node-inspector' : undefined}
                     onClick={() => setSelectedId(filter.id)}
                   >
                     <span className="filter-node-index">{String(index + 1).padStart(2, '0')}</span>
@@ -237,10 +316,24 @@ export function FilterLab({
           />
         </section>
 
-        <aside className="filter-inspector panel-surface">
+        <aside
+          id="floating-node-inspector"
+          ref={inspectorRef}
+          role="dialog"
+          aria-modal="false"
+          aria-label="节点参数悬浮面板"
+          className={`filter-inspector floating panel-surface ${selected ? 'open' : ''}`}
+          style={{ left: inspectorPosition.left, top: inspectorPosition.top }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setSelectedId(null)
+          }}
+        >
           <div className="filter-pane-heading">
-            <span className="eyebrow">NODE OPTIONS</span>
-            <h2>节点参数</h2>
+            <div>
+              <span className="eyebrow">NODE OPTIONS</span>
+              <h2>节点参数</h2>
+            </div>
+            <button type="button" className="floating-inspector-close" aria-label="关闭节点参数" onClick={() => setSelectedId(null)}><X size={14} /></button>
           </div>
           {selected ? (
             <div className="filter-inspector-form">
