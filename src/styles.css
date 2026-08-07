@@ -263,7 +263,7 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .filter-node strong { color: #c0cbd4; font-family: var(--mono); font-size: 10px; }
 .filter-node small { color: #607184; font-family: var(--mono); font-size: 7px; letter-spacing: 0.1em; }
 .filter-node.bypassed .filter-node-type { color: #8d99a4; }
-.filter-graph-empty { position: absolute; inset: 0; z-index: 2; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #536475; background: rgba(8,13,20,0.74); }
+.filter-graph-empty { position: absolute; inset: 0; z-index: 2; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #536475; background: transparent; }
 .filter-graph-empty strong { color: #9eacb9; font-size: 10px; }
 .filter-graph-empty span { font-size: 8px; }
 .audition-track-preview { min-width: 0; max-height: 60vh; position: relative; padding: 14px 10px 10px; display: grid; gap: 6px; overflow-y: auto; border-top: 1px solid var(--border); background: #0a1018; }
