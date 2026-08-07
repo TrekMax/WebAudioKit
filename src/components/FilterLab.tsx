@@ -24,6 +24,7 @@ import {
   type FilterNodeConfig,
 } from '../audio/filterGraph'
 import type { StftPreviewResult } from '../audio/analysis'
+import { formatTime } from '../visualization/format'
 import { FilterTrackPreview } from './FilterTrackPreview'
 import {
   calculateFloatingInspectorPosition,
@@ -44,6 +45,17 @@ interface FilterLabProps {
   readonly numberOfChannels: number
   readonly outputChannelEnabled: readonly [boolean, boolean]
   readonly outputBalance: number
+  readonly inputAudioInfo: {
+    readonly name: string
+    readonly extension: string | null
+    readonly mimeType: string
+    readonly sizeBytes: number
+    readonly durationSeconds: number
+    readonly sampleRate: number
+    readonly numberOfChannels: number
+    readonly lengthSamples: number
+    readonly pcmBytes: number
+  } | null
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
   readonly onFiltersChange: (filters: readonly FilterNodeConfig[]) => void
   readonly onAuditionModeChange: (mode: FilterAuditionMode) => void
@@ -75,6 +87,19 @@ function formatBalance(value: number): string {
   return `${value < 0 ? '左' : '右'} ${Math.round(Math.abs(value) * 100)}%`
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes < 1_024) return `${bytes} B`
+  if (bytes < 1_024 ** 2) return `${(bytes / 1_024).toFixed(1)} KB`
+  if (bytes < 1_024 ** 3) return `${(bytes / 1_024 ** 2).toFixed(1)} MB`
+  return `${(bytes / 1_024 ** 3).toFixed(2)} GB`
+}
+
+function formatChannelCount(numberOfChannels: number): string {
+  if (numberOfChannels === 1) return 'Mono · 1 ch'
+  if (numberOfChannels === 2) return 'Stereo · 2 ch'
+  return `${numberOfChannels} ch`
+}
+
 export function FilterLab({
   filters,
   auditionMode,
@@ -89,6 +114,7 @@ export function FilterLab({
   numberOfChannels,
   outputChannelEnabled,
   outputBalance,
+  inputAudioInfo,
   getFilterFrequencyResponseDb,
   onFiltersChange,
   onAuditionModeChange,
@@ -99,16 +125,23 @@ export function FilterLab({
   const gridRef = useRef<HTMLElement>(null)
   const graphPanelRef = useRef<HTMLElement>(null)
   const inspectorRef = useRef<HTMLElement>(null)
+  const inputTerminalRef = useRef<HTMLButtonElement>(null)
+  const inputInfoRef = useRef<HTMLElement>(null)
   const outputTerminalRef = useRef<HTMLDivElement>(null)
   const outputControlsRef = useRef<HTMLElement>(null)
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>())
   const [selectedId, setSelectedId] = useState<string | null>(filters[0]?.id ?? null)
+  const [inputInfoOpen, setInputInfoOpen] = useState(false)
   const [outputControlsOpen, setOutputControlsOpen] = useState(false)
   const [inspectorPosition, setInspectorPosition] = useState<FloatingInspectorPosition>({
     left: FLOATING_INSPECTOR_GAP,
     top: 70,
   })
   const [outputControlsPosition, setOutputControlsPosition] = useState<FloatingInspectorPosition>({
+    left: FLOATING_INSPECTOR_GAP,
+    top: 70,
+  })
+  const [inputInfoPosition, setInputInfoPosition] = useState<FloatingInspectorPosition>({
     left: FLOATING_INSPECTOR_GAP,
     top: 70,
   })
@@ -192,6 +225,36 @@ export function FilterLab({
     ))
   }, [outputControlsOpen])
 
+  const updateInputInfoPosition = useCallback(() => {
+    if (!inputInfoOpen) return
+    const grid = gridRef.current
+    const graphPanel = graphPanelRef.current
+    const terminal = inputTerminalRef.current
+    if (!grid || !graphPanel || !terminal) return
+    const gridRect = grid.getBoundingClientRect()
+    const panelRect = graphPanel.getBoundingClientRect()
+    const terminalRect = terminal.getBoundingClientRect()
+    const infoWidth = inputInfoRef.current?.offsetWidth ?? FLOATING_INSPECTOR_WIDTH
+    const infoHeight = inputInfoRef.current?.offsetHeight ?? 360
+    const localPosition = calculateFloatingInspectorPosition(
+      {
+        left: terminalRect.left - panelRect.left,
+        right: terminalRect.right - panelRect.left,
+        top: terminalRect.top - panelRect.top,
+      },
+      { width: panelRect.width, height: panelRect.height },
+      { width: infoWidth, height: infoHeight },
+      FLOATING_INSPECTOR_GAP,
+    )
+    const left = panelRect.left - gridRect.left + localPosition.left
+    const top = panelRect.top - gridRect.top + localPosition.top
+    setInputInfoPosition((position) => (
+      Math.abs(position.left - left) < 0.5 && Math.abs(position.top - top) < 0.5
+        ? position
+        : { left, top }
+    ))
+  }, [inputInfoOpen])
+
   useLayoutEffect(() => {
     updateInspectorPosition()
     const frame = window.requestAnimationFrame(updateInspectorPosition)
@@ -204,6 +267,12 @@ export function FilterLab({
     return () => window.cancelAnimationFrame(frame)
   }, [nodeLayoutRevision, updateOutputControlsPosition])
 
+  useLayoutEffect(() => {
+    updateInputInfoPosition()
+    const frame = window.requestAnimationFrame(updateInputInfoPosition)
+    return () => window.cancelAnimationFrame(frame)
+  }, [inputAudioInfo, nodeLayoutRevision, updateInputInfoPosition])
+
   useEffect(() => {
     window.addEventListener('resize', updateInspectorPosition)
     return () => window.removeEventListener('resize', updateInspectorPosition)
@@ -215,16 +284,22 @@ export function FilterLab({
   }, [updateOutputControlsPosition])
 
   useEffect(() => {
-    if (!selected && !outputControlsOpen) return
+    window.addEventListener('resize', updateInputInfoPosition)
+    return () => window.removeEventListener('resize', updateInputInfoPosition)
+  }, [updateInputInfoPosition])
+
+  useEffect(() => {
+    if (!selected && !inputInfoOpen && !outputControlsOpen) return
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setSelectedId(null)
+        setInputInfoOpen(false)
         setOutputControlsOpen(false)
       }
     }
     window.addEventListener('keydown', closeOnEscape)
     return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [outputControlsOpen, selected])
+  }, [inputInfoOpen, outputControlsOpen, selected])
 
   const addFilter = (type: FilterKind) => {
     if (filters.length >= MAX_FILTER_NODES) return
@@ -234,6 +309,7 @@ export function FilterLab({
       ...filters,
       { ...created, frequencyHz: Math.min(created.frequencyHz, maximumFrequency) },
     ])
+    setInputInfoOpen(false)
     setOutputControlsOpen(false)
     setSelectedId(id)
   }
@@ -334,16 +410,34 @@ export function FilterLab({
             aria-label="串行滤波节点图"
             onScroll={() => {
               updateInspectorPosition()
+              updateInputInfoPosition()
               updateOutputControlsPosition()
             }}
             onClick={(event) => {
-              if (!(event.target as Element).closest('.filter-node, .output-node-control-trigger')) {
+              if (!(event.target as Element).closest('.filter-node, .input-node-trigger, .output-node-control-trigger')) {
                 setSelectedId(null)
+                setInputInfoOpen(false)
                 setOutputControlsOpen(false)
               }
             }}
           >
-            <div className="signal-terminal input"><AudioWaveform size={18} /><strong>输入</strong><small>原始 PCM</small></div>
+            <button
+              ref={inputTerminalRef}
+              type="button"
+              className={`signal-terminal input input-node-trigger ${inputInfoOpen ? 'active' : ''}`}
+              aria-expanded={inputInfoOpen}
+              aria-controls="input-audio-info"
+              onClick={(event) => {
+                event.stopPropagation()
+                setSelectedId(null)
+                setOutputControlsOpen(false)
+                setInputInfoOpen((open) => !open)
+              }}
+            >
+              <AudioWaveform size={18} />
+              <strong>输入</strong>
+              <small>原始 PCM</small>
+            </button>
             <span className="signal-connector"><Cable size={15} /></span>
             {filters.map((filter, index) => {
               const definition = FILTER_DEFINITIONS[filter.type]
@@ -360,6 +454,7 @@ export function FilterLab({
                     aria-expanded={effectiveSelectedId === filter.id}
                     aria-controls={effectiveSelectedId === filter.id ? 'floating-node-inspector' : undefined}
                     onClick={() => {
+                      setInputInfoOpen(false)
                       setOutputControlsOpen(false)
                       setSelectedId(filter.id)
                     }}
@@ -387,6 +482,7 @@ export function FilterLab({
                 onClick={(event) => {
                   event.stopPropagation()
                   setSelectedId(null)
+                  setInputInfoOpen(false)
                   setOutputControlsOpen((open) => !open)
                 }}
               >
@@ -502,6 +598,44 @@ export function FilterLab({
             </div>
           ) : (
             <div className="filter-inspector-empty"><SlidersHorizontal size={24} /><strong>未选择节点</strong><span>添加或点击画布中的节点以编辑参数。</span></div>
+          )}
+        </aside>
+
+        <aside
+          id="input-audio-info"
+          ref={inputInfoRef}
+          role="dialog"
+          aria-modal="false"
+          aria-label="输入音频信息"
+          className={`filter-inspector floating panel-surface ${inputInfoOpen ? 'open' : ''}`}
+          style={{ left: inputInfoPosition.left, top: inputInfoPosition.top }}
+        >
+          <div className="filter-pane-heading">
+            <div>
+              <span className="eyebrow">NODE INFO</span>
+              <h2>输入信息</h2>
+            </div>
+            <button type="button" className="floating-inspector-close" aria-label="关闭输入音频信息" onClick={() => setInputInfoOpen(false)}><X size={14} /></button>
+          </div>
+          {inputAudioInfo ? (
+            <div className="filter-inspector-form">
+              <div className="filter-selected-summary">
+                <span className="filter-palette-icon"><AudioWaveform size={15} /></span>
+                <span><strong title={inputAudioInfo.name}>{inputAudioInfo.name}</strong><small>{inputAudioInfo.extension?.toUpperCase() || inputAudioInfo.mimeType || '未知格式'}</small></span>
+              </div>
+              <dl className="input-info-metadata">
+                <div><dt>时长</dt><dd>{formatTime(inputAudioInfo.durationSeconds, true)}</dd></div>
+                <div><dt>采样率</dt><dd>{formatFrequency(inputAudioInfo.sampleRate)}</dd></div>
+                <div><dt>声道</dt><dd>{formatChannelCount(inputAudioInfo.numberOfChannels)}</dd></div>
+                <div><dt>采样帧</dt><dd>{inputAudioInfo.lengthSamples.toLocaleString('zh-CN')}</dd></div>
+                <div><dt>文件大小</dt><dd>{formatBytes(inputAudioInfo.sizeBytes)}</dd></div>
+                <div><dt>解码 PCM</dt><dd>{formatBytes(inputAudioInfo.pcmBytes)}</dd></div>
+                <div><dt>MIME</dt><dd title={inputAudioInfo.mimeType}>{inputAudioInfo.mimeType || '未知'}</dd></div>
+              </dl>
+              <p className="filter-runtime-note">当前节点读取会话内解码后的原始 PCM；滤波试听不会修改该输入或源文件。</p>
+            </div>
+          ) : (
+            <div className="filter-inspector-empty"><AudioWaveform size={24} /><strong>尚未导入音频</strong><span>导入文件后可在这里查看输入源信息。</span></div>
           )}
         </aside>
 

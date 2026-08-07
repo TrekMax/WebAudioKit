@@ -1435,6 +1435,7 @@ export function App() {
           numberOfChannels={playback.numberOfChannels}
           outputChannelEnabled={playback.outputChannelEnabled}
           outputBalance={playback.outputBalance}
+          inputAudioInfo={activeAsset?.metadata ?? null}
           getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
           onFiltersChange={handleFilterChainChange}
           onAuditionModeChange={handleFilterAuditionChange}
