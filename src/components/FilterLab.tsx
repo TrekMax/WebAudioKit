@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 
 import {
+  EQ_BAND_FREQUENCIES_HZ,
   FILTER_DEFINITIONS,
   MAX_FILTER_NODES,
   createFilterNodeConfig,
@@ -26,6 +27,7 @@ import {
 import type { StftPreviewResult } from '../audio/analysis'
 import { formatTime } from '../visualization/format'
 import { FilterTrackPreview } from './FilterTrackPreview'
+import { EqCurveEditor } from './EqCurveEditor'
 import {
   calculateFloatingInspectorPosition,
   type FloatingInspectorPosition,
@@ -357,7 +359,7 @@ export function FilterLab({
         <div>
           <span className="eyebrow">NON-DESTRUCTIVE AUDITION</span>
           <h1><SlidersHorizontal size={18} /> 音频选项与节点编译器</h1>
-          <p>串行编译 Web Audio 滤波与采样率节点；试听链不会修改源 PCM、分析结果或导出内容。</p>
+          <p>串行编译 Web Audio 滤波、EQ 与采样率节点；试听链不会修改源 PCM、分析结果或导出内容。</p>
         </div>
         <div className="filter-compile-status" aria-live="polite">
           <CheckCircle2 size={15} />
@@ -381,7 +383,7 @@ export function FilterLab({
                   disabled={filters.length >= MAX_FILTER_NODES}
                   onClick={() => addFilter(type)}
                 >
-                  <span className="filter-palette-icon">{type === 'resampler' ? <Gauge size={14} /> : <Waves size={14} />}</span>
+                  <span className="filter-palette-icon">{type === 'resampler' ? <Gauge size={14} /> : type === 'equalizer' ? <SlidersHorizontal size={14} /> : <Waves size={14} />}</span>
                   <span><strong>{definition.label}</strong><small>{definition.description}</small></span>
                   <span className="filter-add-mark">+</span>
                 </button>
@@ -461,7 +463,9 @@ export function FilterLab({
                   >
                     <span className="filter-node-index">{String(index + 1).padStart(2, '0')}</span>
                     <span className="filter-node-type">{definition.label}</span>
-                    <strong>{formatFrequency(filter.type === 'resampler' ? filter.targetSampleRateHz : filter.frequencyHz)}</strong>
+                    <strong>{filter.type === 'equalizer'
+                      ? `${EQ_BAND_FREQUENCIES_HZ.length} BAND`
+                      : formatFrequency(filter.type === 'resampler' ? filter.targetSampleRateHz : filter.frequencyHz)}</strong>
                     <small>{filter.enabled ? 'ACTIVE' : 'BYPASS'}</small>
                   </button>
                   <span className="signal-connector"><Cable size={15} /></span>
@@ -561,6 +565,11 @@ export function FilterLab({
                     ))}
                   </div>
                 </>
+              ) : selected.type === 'equalizer' ? (
+                <EqCurveEditor
+                  gainsDb={selected.eqGainsDb}
+                  onChange={(eqGainsDb) => updateSelected({ eqGainsDb })}
+                />
               ) : (
                 <>
                   <label className="filter-field filter-slider-field">
@@ -594,7 +603,11 @@ export function FilterLab({
                 <button type="button" className="secondary-button danger" onClick={removeSelected}><Trash2 size={13} /> 删除</button>
               </div>
 
-              <p className="filter-runtime-note">{selected.type === 'resampler' ? '下采样使用实时抗混叠与抽取；上采样由 Web Audio 上下文完成插值，超过输出上下文的采样率不会生成新的频率信息。不支持 AudioWorklet 时节点透明旁路。' : `当前 Nyquist：${formatFrequency(nyquist)}。超出当前设备范围的频率会由 Web Audio 安全钳位。`}</p>
+              <p className="filter-runtime-note">{selected.type === 'resampler'
+                ? '下采样使用实时抗混叠与抽取；上采样由 Web Audio 上下文完成插值，超过输出上下文的采样率不会生成新的频率信息。不支持 AudioWorklet 时节点透明旁路。'
+                : selected.type === 'equalizer'
+                  ? '七段 EQ 编译为串联的原生 Peaking Biquad；曲线调整会原位更新监听参数，不重启当前播放。'
+                  : `当前 Nyquist：${formatFrequency(nyquist)}。超出当前设备范围的频率会由 Web Audio 安全钳位。`}</p>
             </div>
           ) : (
             <div className="filter-inspector-empty"><SlidersHorizontal size={24} /><strong>未选择节点</strong><span>添加或点击画布中的节点以编辑参数。</span></div>

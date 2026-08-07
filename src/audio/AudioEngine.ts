@@ -15,7 +15,9 @@ import {
 } from './types'
 import {
   applyFilterNodeConfig,
+  cloneFilterNodeConfig,
   compileFilterChain,
+  compiledFilterNodeCount,
   validateFilterChain,
   type FilterAuditionMode,
   type FilterNodeConfig,
@@ -45,6 +47,11 @@ interface FilterRouting {
   readonly dryGain: GainNode
   readonly filteredGain: GainNode
   readonly filters: readonly AudioNode[]
+  readonly filterGroups: readonly {
+    readonly id: string
+    readonly type: FilterNodeConfig['type']
+    readonly nodes: readonly AudioNode[]
+  }[]
   readonly responseFilters: readonly BiquadFilterNode[]
 }
 
@@ -575,20 +582,20 @@ export class AudioEngine {
       ))
     ) {
       nextActiveFilters.forEach((filter, index) => {
-        const node = this.filterRouting?.filters[index]
-        if (node) applyFilterNodeConfig(node, filter, this.context.currentTime)
+        const group = this.filterRouting?.filterGroups[index]
+        if (group) applyFilterNodeConfig(group.nodes, filter, this.context.currentTime)
       })
-      this.filterChain = filters.map((filter) => ({ ...filter }))
+      this.filterChain = filters.map(cloneFilterNodeConfig)
       return
     }
 
     const nextRouting = this.createFilterRouting(filters)
     this.replaceFilterRouting(nextRouting)
-    this.filterChain = filters.map((filter) => ({ ...filter }))
+    this.filterChain = filters.map(cloneFilterNodeConfig)
   }
 
   getFilterChain(): readonly FilterNodeConfig[] {
-    return this.filterChain.map((filter) => ({ ...filter }))
+    return this.filterChain.map(cloneFilterNodeConfig)
   }
 
   getFilterFrequencyResponseDb(frequenciesHz: Float32Array): Float32Array {
@@ -935,8 +942,21 @@ export class AudioEngine {
       filters,
       (filter) => this.createResamplerNode(filter),
     )
-    const responseFilters = compiled.flatMap((node, index) => (
-      activeFilters[index]?.type === 'resampler' ? [] : [node as BiquadFilterNode]
+    let compiledOffset = 0
+    const filterGroups = activeFilters.map((filter) => {
+      const count = compiledFilterNodeCount(filter)
+      const nodes = compiled.slice(compiledOffset, compiledOffset + count)
+      compiledOffset += count
+      return { id: filter.id, type: filter.type, nodes }
+    })
+    if (compiledOffset !== compiled.length) {
+      for (const node of compiled) tryDisconnect(node)
+      throw new Error('Compiled filter groups do not cover the runtime chain')
+    }
+    const responseFilters = filterGroups.flatMap((group) => (
+      group.type === 'resampler'
+        ? []
+        : group.nodes.map((node) => node as BiquadFilterNode)
     ))
     let dryGain: GainNode | null = null
     let filteredGain: GainNode | null = null
@@ -953,7 +973,7 @@ export class AudioEngine {
         compiled[index]?.connect(compiled[index + 1]!)
       }
       compiled.at(-1)?.connect(filteredGain)
-      return { dryGain, filteredGain, filters: compiled, responseFilters }
+      return { dryGain, filteredGain, filters: compiled, filterGroups, responseFilters }
     } catch (error) {
       for (const node of compiled) tryDisconnect(node)
       if (dryGain) tryDisconnect(dryGain)

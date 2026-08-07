@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  EQ_BAND_FREQUENCIES_HZ,
+  EQ_BAND_Q,
   FILTER_DEFINITIONS,
+  cloneFilterNodeConfig,
   compileFilterChain,
   createFilterNodeConfig,
   validateFilterChain,
@@ -61,6 +64,9 @@ describe('filter graph compiler', () => {
     expect(createFilterNodeConfig('resampler', 'rate')).toMatchObject({
       targetSampleRateHz: 24_000,
     })
+    expect(createFilterNodeConfig('equalizer', 'eq').eqGainsDb).toEqual(
+      EQ_BAND_FREQUENCIES_HZ.map(() => 0),
+    )
   })
 
   it('compiles enabled nodes in order and applies their parameters', () => {
@@ -106,6 +112,35 @@ describe('filter graph compiler', () => {
     expect(resampler.targetSampleRateHz.value).toBe(16_000)
   })
 
+  it('compiles one equalizer node into an ordered seven-band peaking bank', () => {
+    const context = new FakeFilterContext()
+    const equalizer = {
+      ...createFilterNodeConfig('equalizer', 'tone-shape'),
+      eqGainsDb: [-6, -3, 0, 2, 4, 1, -2],
+    }
+
+    const compiled = compileFilterChain(context, [equalizer])
+
+    expect(compiled).toHaveLength(EQ_BAND_FREQUENCIES_HZ.length)
+    expect(context.nodes.map((node) => node.type)).toEqual(
+      EQ_BAND_FREQUENCIES_HZ.map(() => 'peaking'),
+    )
+    expect(context.nodes.map((node) => node.frequency.value)).toEqual(EQ_BAND_FREQUENCIES_HZ)
+    expect(context.nodes.map((node) => node.Q.value)).toEqual(
+      EQ_BAND_FREQUENCIES_HZ.map(() => EQ_BAND_Q),
+    )
+    expect(context.nodes.map((node) => node.gain.value)).toEqual(equalizer.eqGainsDb)
+  })
+
+  it('deep-copies equalizer bands', () => {
+    const equalizer = createFilterNodeConfig('equalizer', 'eq')
+    const copy = cloneFilterNodeConfig(equalizer)
+
+    expect(copy).not.toBe(equalizer)
+    expect(copy.eqGainsDb).not.toBe(equalizer.eqGainsDb)
+    expect(copy.eqGainsDb).toEqual(equalizer.eqGainsDb)
+  })
+
   it('rejects duplicate ids and unsafe parameter ranges', () => {
     const lowpass = createFilterNodeConfig('lowpass', 'same')
 
@@ -117,5 +152,13 @@ describe('filter graph compiler', () => {
       ...createFilterNodeConfig('resampler', 'rate'),
       targetSampleRateHz: 2_999,
     }])).toThrow('sample rate')
+    expect(() => validateFilterChain([{
+      ...createFilterNodeConfig('equalizer', 'eq'),
+      eqGainsDb: [0, 0],
+    }])).toThrow('7 bands')
+    expect(() => validateFilterChain([{
+      ...createFilterNodeConfig('equalizer', 'eq'),
+      eqGainsDb: [0, 0, 0, 0, 0, 0, 25],
+    }])).toThrow('Equalizer gain')
   })
 })

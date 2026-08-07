@@ -518,6 +518,41 @@ describe('AudioEngine', () => {
     expect(Array.from(response).every((value) => value === response[0])).toBe(true)
   })
 
+  it('updates equalizer bands in place without restarting playback', async () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+    engine.load(createAudioBuffer())
+    await engine.play()
+    const source = context.sources[0]
+    const equalizer = createFilterNodeConfig('equalizer', 'graphic-eq')
+
+    engine.setFilterChain([equalizer])
+
+    const runtimeBands = [...context.filters]
+    expect(runtimeBands).toHaveLength(7)
+    expect(runtimeBands.every((node) => node.type === 'peaking')).toBe(true)
+
+    engine.setFilterChain([{
+      ...equalizer,
+      eqGainsDb: [-8, -4, 0, 3, 6, 2, -1],
+    }])
+
+    expect(context.filters).toEqual(runtimeBands)
+    expect(context.filters.map((node) => node.gain.value)).toEqual([-8, -4, 0, 3, 6, 2, -1])
+    expect(context.filters.every((node) => !node.disconnected)).toBe(true)
+    expect(context.sources).toHaveLength(1)
+    expect(source).toMatchObject({ stopped: false, disconnected: false })
+    expect(engine.getFilterFrequencyResponseDb(new Float32Array([1_000]))[0]).toBeCloseTo(
+      7 * 20 * Math.log10(0.5),
+      5,
+    )
+
+    const exposed = engine.getFilterChain()[0]
+    const exposedGains = exposed?.eqGainsDb as number[]
+    exposedGains[0] = 24
+    expect(engine.getFilterChain()[0]?.eqGainsDb[0]).toBe(-8)
+  })
+
   it('includes the resampler anti-alias response in spectrum previews', () => {
     const engine = createEngine(new FakeAudioContext())
     engine.setFilterChain([{

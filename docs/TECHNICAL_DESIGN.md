@@ -339,7 +339,7 @@ AudioBufferSourceNode ─> Splitter ────┼─> Channel Gain … ─┼�
 
 播放图不依赖 `AnalyserNode` 生成权威 FFT，以保证实时与离线频谱使用相同窗函数和幅度标定。Mute/Solo 不回写源 PCM，也不进入分析或导出管线。
 
-滤波选项页可在 Merger 后编译一条有序监听效果链。基础滤波编译为 BiquadFilterNode；采样器编译为 AudioWorkletNode，在输出上下文固定采样率内模拟目标采样率：下采样先以有界一阶低通抗混叠再抽取/保持，上采样依赖 Web Audio 对输入源的上下文采样率转换且不虚构超过上下文 Nyquist 的信息。Worklet 构造时预分配最多 32 声道的状态，`process()` 不执行 I/O、日志、Promise、动态导入或数组扩容；能力缺失或模块加载失败时以透明 GainNode 旁路。
+滤波选项页可在 Merger 后编译一条有序监听效果链。基础滤波编译为 BiquadFilterNode；七段 EQ 曲线节点编译为固定顺序的七个 Peaking BiquadFilterNode，中心频率为 60 Hz、150 Hz、400 Hz、1 kHz、2.5 kHz、6 kHz 与 15 kHz，Q 固定为 1.1，声明式配置只保存各段 ±24 dB 增益。运行路由同时维护声明式节点到一个或多个 AudioNode 的分组映射，因此曲线拖动只原位更新对应参数，类型、启用状态或链路结构变化时才重建整组节点；频率响应预览累加组内全部 Biquad 响应。采样器编译为 AudioWorkletNode，在输出上下文固定采样率内模拟目标采样率：下采样先以有界一阶低通抗混叠再抽取/保持，上采样依赖 Web Audio 对输入源的上下文采样率转换且不虚构超过上下文 Nyquist 的信息。Worklet 构造时预分配最多 32 声道的状态，`process()` 不执行 I/O、日志、Promise、动态导入或数组扩容；能力缺失或模块加载失败时以透明 GainNode 旁路。
 
 干声与湿声分支同时连接到 Master Gain，A/B 试听仅对两条分支的 GainNode 做短斜坡切换，不重建 AudioBufferSourceNode。节点增删、排序、类型或参数变化时在主线程控制路径创建新链，切换连接后断开并释放旧节点；只有采样器的固定成本逐采样内核进入实时渲染回调。效果链只属于监听图，不进入原始 PCM、权威 FFT/STFT、峰值和导出管线。双声轨预览共享源时间轮廓；频谱模式对 A 使用当前位置源 STFT，对 B 叠加 BiquadFilterNode 的实际幅频响应与采样器抗混叠响应。二维声谱模式复用有界降采样后的离线源 STFT，并将相同响应逐频率 bin 叠加到 B 轨；两种 B 视图均为监听预测，不将其冒充为效果后权威 STFT。
 
@@ -957,6 +957,14 @@ Web Audio 集成可用 `OfflineAudioContext` 验证音频图；状态机单测�
 - **决定**：采样器节点在 AudioWorklet 内执行固定成本的抗混叠与抽取/保持，并始终输出 AudioContext 的固定采样率。
 - **原因**：Web Audio 中间节点不能改变上下文输出采样率；监听效果仍需保持播放时长、源 PCM 和导出语义不变。
 - **代价**：上采样不产生超过上下文 Nyquist 的新信息，且该节点不是离线高质量重采样或导出重采样功能。
+
+### ADR-013：EQ 曲线节点使用固定七段 Biquad 分组
+
+- **状态**：Accepted
+- **记录**：[`docs/adr/013-graphic-equalizer-node.md`](adr/013-graphic-equalizer-node.md)
+- **决定**：一个声明式 EQ 节点固定展开为七个串联 Peaking BiquadFilterNode，并通过运行时分组映射原位更新各段增益。
+- **原因**：在不中断播放的前提下提供可视化曲线调节，同时保持配置、CPU 成本和滤波稳定性有界。
+- **代价**：首版中心频率和 Q 固定，不支持任意频段、动态 EQ 或参数自动化。
 
 ## 24. 实施顺序与技术验收门
 

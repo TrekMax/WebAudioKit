@@ -1,4 +1,8 @@
 export const MAX_FILTER_NODES = 16
+export const EQ_BAND_FREQUENCIES_HZ = [60, 150, 400, 1_000, 2_500, 6_000, 15_000] as const
+export const EQ_GAIN_MIN_DB = -24
+export const EQ_GAIN_MAX_DB = 24
+export const EQ_BAND_Q = 1.1
 
 export type FilterKind =
   | 'lowpass'
@@ -9,6 +13,7 @@ export type FilterKind =
   | 'lowshelf'
   | 'highshelf'
   | 'allpass'
+  | 'equalizer'
   | 'resampler'
 
 export type FilterAuditionMode = 'original' | 'filtered'
@@ -21,6 +26,7 @@ export interface FilterNodeConfig {
   readonly q: number
   readonly gainDb: number
   readonly targetSampleRateHz: number
+  readonly eqGainsDb: readonly number[]
 }
 
 export interface FilterDefinition {
@@ -31,7 +37,7 @@ export interface FilterDefinition {
   readonly defaultGainDb: number
   readonly usesQ: boolean
   readonly usesGain: boolean
-  readonly processingKind: 'biquad' | 'resampler'
+  readonly processingKind: 'biquad' | 'equalizer' | 'resampler'
 }
 
 export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> = {
@@ -115,6 +121,16 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
     usesGain: false,
     processingKind: 'biquad',
   },
+  equalizer: {
+    label: 'EQ 曲线',
+    description: '七段图示均衡曲线',
+    defaultFrequencyHz: 1_000,
+    defaultQ: EQ_BAND_Q,
+    defaultGainDb: 0,
+    usesQ: false,
+    usesGain: false,
+    processingKind: 'equalizer',
+  },
   resampler: {
     label: '采样器',
     description: '实时上采样或抗混叠下采样',
@@ -142,7 +158,12 @@ export function createFilterNodeConfig(type: FilterKind, id: string): FilterNode
     q: definition.defaultQ,
     gainDb: definition.defaultGainDb,
     targetSampleRateHz: 24_000,
+    eqGainsDb: EQ_BAND_FREQUENCIES_HZ.map(() => 0),
   }
+}
+
+export function cloneFilterNodeConfig(filter: FilterNodeConfig): FilterNodeConfig {
+  return { ...filter, eqGainsDb: [...filter.eqGainsDb] }
 }
 
 export function validateFilterChain(
@@ -176,6 +197,16 @@ export function validateFilterChain(
     if (!Number.isFinite(filter.gainDb) || filter.gainDb < -40 || filter.gainDb > 40) {
       throw new RangeError('Filter gain must be within [-40, 40] dB')
     }
+    if (filter.type === 'equalizer') {
+      if (!Array.isArray(filter.eqGainsDb) || filter.eqGainsDb.length !== EQ_BAND_FREQUENCIES_HZ.length) {
+        throw new RangeError(`Equalizer must contain ${EQ_BAND_FREQUENCIES_HZ.length} bands`)
+      }
+      for (const gainDb of filter.eqGainsDb) {
+        if (!Number.isFinite(gainDb) || gainDb < EQ_GAIN_MIN_DB || gainDb > EQ_GAIN_MAX_DB) {
+          throw new RangeError(`Equalizer gain must be within [${EQ_GAIN_MIN_DB}, ${EQ_GAIN_MAX_DB}] dB`)
+        }
+      }
+    }
     if (
       filter.type === 'resampler'
       && (
@@ -206,14 +237,24 @@ export function compileFilterChain(
   try {
     for (const filter of filters) {
       if (!filter.enabled) continue
-      const node = filter.type === 'resampler'
-        ? createResamplerNode?.(filter)
-        : context.createBiquadFilter()
-      if (!node) {
-        throw new Error('Resampler node factory is unavailable')
+      const nodes: AudioNode[] = []
+      if (filter.type === 'equalizer') {
+        for (let index = 0; index < EQ_BAND_FREQUENCIES_HZ.length; index += 1) {
+          const node = context.createBiquadFilter()
+          nodes.push(node)
+          compiled.push(node)
+        }
+      } else {
+        const node = filter.type === 'resampler'
+          ? createResamplerNode?.(filter)
+          : context.createBiquadFilter()
+        if (!node) {
+          throw new Error('Resampler node factory is unavailable')
+        }
+        nodes.push(node)
+        compiled.push(node)
       }
-      compiled.push(node)
-      applyFilterNodeConfig(node, filter, context.currentTime)
+      applyFilterNodeConfig(nodes, filter, context.currentTime)
     }
     return compiled
   } catch (error) {
@@ -229,10 +270,27 @@ export function compileFilterChain(
 }
 
 export function applyFilterNodeConfig(
-  node: AudioNode,
+  nodes: readonly AudioNode[],
   filter: FilterNodeConfig,
   time: number,
 ): void {
+  if (filter.type === 'equalizer') {
+    if (nodes.length !== EQ_BAND_FREQUENCIES_HZ.length) {
+      throw new Error('Equalizer runtime node count does not match its band count')
+    }
+    nodes.forEach((node, index) => {
+      const biquad = node as BiquadFilterNode
+      biquad.type = 'peaking'
+      biquad.frequency.setValueAtTime(EQ_BAND_FREQUENCIES_HZ[index] ?? 1_000, time)
+      biquad.Q.setValueAtTime(EQ_BAND_Q, time)
+      biquad.gain.setValueAtTime(filter.eqGainsDb[index] ?? 0, time)
+    })
+    return
+  }
+  const node = nodes[0]
+  if (!node || nodes.length !== 1) {
+    throw new Error('Filter runtime node count must be one')
+  }
   if (filter.type === 'resampler') {
     const parameter = (node as AudioWorkletNode).parameters?.get('targetSampleRateHz')
     parameter?.setValueAtTime(filter.targetSampleRateHz, time)
@@ -243,4 +301,8 @@ export function applyFilterNodeConfig(
   biquad.frequency.setValueAtTime(filter.frequencyHz, time)
   biquad.Q.setValueAtTime(filter.q, time)
   biquad.gain.setValueAtTime(filter.gainDb, time)
+}
+
+export function compiledFilterNodeCount(filter: FilterNodeConfig): number {
+  return filter.type === 'equalizer' ? EQ_BAND_FREQUENCIES_HZ.length : 1
 }

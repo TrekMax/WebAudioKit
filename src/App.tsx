@@ -20,6 +20,7 @@ import {
 } from 'lucide-react'
 import { AudioEngine } from './audio/AudioEngine'
 import {
+  cloneFilterNodeConfig,
   validateFilterChain,
   type FilterAuditionMode,
   type FilterNodeConfig,
@@ -334,7 +335,7 @@ export function App() {
   const handleFilterChainChange = useCallback((nextFilters: readonly FilterNodeConfig[]) => {
     try {
       validateFilterChain(nextFilters)
-      const copied = nextFilters.map((filter) => ({ ...filter }))
+      const copied = nextFilters.map(cloneFilterNodeConfig)
       engineRef.current?.setFilterChain(copied)
       filterChainRef.current = copied
       setFilterChain(copied)
