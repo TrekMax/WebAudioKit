@@ -1,20 +1,90 @@
+import type { StftPreviewResult } from '../audio/analysis'
+import { normalizeDb, spectrumColor } from './colorMap'
+
 const MAX_PREVIEW_CHANNELS = 2
 const DEFAULT_SAMPLES_PER_COLUMN = 24
+const DEFAULT_TRACK_PREVIEW_VIEWPORT_RATIO = 0.5
 const TRACK_PREVIEW_VIEWPORT_RATIO = 0.6
 const TRACK_PREVIEW_CHROME_HEIGHT = 72
+const MAX_TRACK_SPECTROGRAM_WIDTH = 1_024
+const MAX_TRACK_SPECTROGRAM_HEIGHT = 384
 
 export const MIN_TRACK_LANE_HEIGHT = 56
 
-export function maximumTrackLaneHeight(viewportHeight: number): number {
+function trackLaneHeightForViewportRatio(viewportHeight: number, ratio: number): number {
   if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) {
     return MIN_TRACK_LANE_HEIGHT
   }
   return Math.max(
     MIN_TRACK_LANE_HEIGHT,
-    Math.floor(
-      (viewportHeight * TRACK_PREVIEW_VIEWPORT_RATIO - TRACK_PREVIEW_CHROME_HEIGHT) / 2,
-    ),
+    Math.floor((viewportHeight * ratio - TRACK_PREVIEW_CHROME_HEIGHT) / 2),
   )
+}
+
+export function defaultTrackLaneHeight(viewportHeight: number): number {
+  return trackLaneHeightForViewportRatio(viewportHeight, DEFAULT_TRACK_PREVIEW_VIEWPORT_RATIO)
+}
+
+export function maximumTrackLaneHeight(viewportHeight: number): number {
+  return trackLaneHeightForViewportRatio(viewportHeight, TRACK_PREVIEW_VIEWPORT_RATIO)
+}
+
+export interface TrackSpectrogramPixels {
+  readonly width: number
+  readonly height: number
+  readonly pixels: Uint8ClampedArray
+}
+
+export function buildTrackSpectrogramPixels(
+  result: Pick<StftPreviewResult, 'frameCount' | 'binCount' | 'minDb' | 'maxDb' | 'valuesDbfs'>,
+  responseDb: Float32Array | null = null,
+  maximumWidth = MAX_TRACK_SPECTROGRAM_WIDTH,
+  maximumHeight = MAX_TRACK_SPECTROGRAM_HEIGHT,
+): TrackSpectrogramPixels | null {
+  if (result.frameCount <= 0 || result.binCount <= 0) return null
+  if (
+    !Number.isSafeInteger(maximumWidth)
+    || !Number.isSafeInteger(maximumHeight)
+    || maximumWidth <= 0
+    || maximumHeight <= 0
+    || maximumWidth > 2_048
+    || maximumHeight > 1_024
+  ) {
+    throw new RangeError('Track spectrogram dimensions exceed the bounded preview range')
+  }
+  if (result.valuesDbfs.length < result.frameCount * result.binCount) {
+    throw new RangeError('Track spectrogram source matrix is incomplete')
+  }
+  if (responseDb && responseDb.length < result.binCount) {
+    throw new RangeError('Track spectrogram response does not cover every frequency bin')
+  }
+
+  const width = Math.min(result.frameCount, maximumWidth)
+  const height = Math.min(result.binCount, maximumHeight)
+  const pixels = new Uint8ClampedArray(width * height * 4)
+  for (let x = 0; x < width; x += 1) {
+    const frame = width <= 1
+      ? 0
+      : Math.round((x / (width - 1)) * (result.frameCount - 1))
+    for (let y = 0; y < height; y += 1) {
+      const bin = height <= 1
+        ? 0
+        : Math.round((1 - y / (height - 1)) * (result.binCount - 1))
+      const sourceDb = result.valuesDbfs[frame * result.binCount + bin] ?? result.minDb
+      const valueDb = sourceDb + (responseDb?.[bin] ?? 0)
+      const [red, green, blue] = spectrumColor(normalizeDb(
+        valueDb,
+        result.minDb,
+        result.maxDb,
+      ))
+      const target = (y * width + x) * 4
+      pixels[target] = red
+      pixels[target + 1] = green
+      pixels[target + 2] = blue
+      pixels[target + 3] = 255
+    }
+  }
+  return { width, height, pixels }
 }
 
 export interface TrackOverview {

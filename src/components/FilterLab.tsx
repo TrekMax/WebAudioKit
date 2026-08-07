@@ -34,6 +34,7 @@ interface FilterLabProps {
   readonly playing: boolean
   readonly sampleRate: number | null
   readonly spectrum: StftPreviewResult | null
+  readonly spectrogram: StftPreviewResult | null
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
   readonly onFiltersChange: (filters: readonly FilterNodeConfig[]) => void
   readonly onAuditionModeChange: (mode: FilterAuditionMode) => void
@@ -64,6 +65,7 @@ export function FilterLab({
   playing,
   sampleRate,
   spectrum,
+  spectrogram,
   getFilterFrequencyResponseDb,
   onFiltersChange,
   onAuditionModeChange,
@@ -229,6 +231,7 @@ export function FilterLab({
             auditionMode={auditionMode}
             playing={playing}
             spectrum={spectrum}
+            spectrogram={spectrogram}
             getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
             onAuditionModeChange={onAuditionModeChange}
           />

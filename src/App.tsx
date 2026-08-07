@@ -1428,6 +1428,7 @@ export function App() {
           playing={playback.kind === 'playing'}
           sampleRate={activeAsset?.buffer.sampleRate ?? null}
           spectrum={realtimeResult ?? realtimeChannelResults[0]?.preview ?? null}
+          spectrogram={activeAsset?.analysis ?? null}
           getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
           onFiltersChange={handleFilterChainChange}
           onAuditionModeChange={handleFilterAuditionChange}

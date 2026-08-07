@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   MIN_TRACK_LANE_HEIGHT,
   buildTrackOverview,
+  buildTrackSpectrogramPixels,
+  defaultTrackLaneHeight,
   maximumTrackLaneHeight,
 } from './trackPreview'
 
@@ -25,9 +27,32 @@ describe('buildTrackOverview', () => {
   })
 
   it('caps two lanes and preview chrome within 60% of the viewport', () => {
+    expect(defaultTrackLaneHeight(1_000)).toBe(214)
     expect(maximumTrackLaneHeight(1_000)).toBe(264)
     expect(maximumTrackLaneHeight(400)).toBe(84)
     expect(maximumTrackLaneHeight(100)).toBe(MIN_TRACK_LANE_HEIGHT)
     expect(maximumTrackLaneHeight(Number.NaN)).toBe(MIN_TRACK_LANE_HEIGHT)
+  })
+
+  it('builds a bounded source and response-adjusted track spectrogram', () => {
+    const result = {
+      frameCount: 2,
+      binCount: 2,
+      minDb: -100,
+      maxDb: 0,
+      valuesDbfs: new Float32Array([-100, 0, -50, -25]),
+    }
+    const source = buildTrackSpectrogramPixels(result)
+    const filtered = buildTrackSpectrogramPixels(result, new Float32Array([0, -100]))
+
+    expect(source).toMatchObject({ width: 2, height: 2 })
+    expect(source?.pixels.slice(0, 3)).not.toEqual(new Uint8ClampedArray([7, 10, 20]))
+    expect(filtered?.pixels.slice(0, 3)).toEqual(new Uint8ClampedArray([7, 10, 20]))
+    expect(filtered?.pixels.slice(4, 7)).toEqual(new Uint8ClampedArray([7, 10, 20]))
+    expect(buildTrackSpectrogramPixels(result, null, 1, 1)).toMatchObject({
+      width: 1,
+      height: 1,
+    })
+    expect(() => buildTrackSpectrogramPixels(result, new Float32Array(1))).toThrow(RangeError)
   })
 })
