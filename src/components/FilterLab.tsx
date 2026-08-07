@@ -13,7 +13,6 @@ import {
   SlidersHorizontal,
   Trash2,
   Volume2,
-  Waves,
   X,
 } from 'lucide-react'
 
@@ -29,6 +28,10 @@ import {
 import type { StftPreviewResult } from '../audio/analysis'
 import { formatTime } from '../visualization/format'
 import { FilterTrackPreview } from './FilterTrackPreview'
+import {
+  FilterNodeGlyph,
+  FilterNodeGuidePopover,
+} from './FilterNodeGuidePopover'
 import { EqCurveEditor } from './EqCurveEditor'
 import {
   calculateFloatingInspectorPosition,
@@ -77,6 +80,8 @@ interface FilterLabProps {
 const FILTER_TYPES = Object.keys(FILTER_DEFINITIONS) as FilterKind[]
 const FLOATING_INSPECTOR_GAP = 12
 const FLOATING_INSPECTOR_WIDTH = 300
+const PALETTE_GUIDE_WIDTH = 340
+const PALETTE_GUIDE_HEIGHT = 430
 const DRAG_AUTO_SCROLL_EDGE_PX = 56
 const DRAG_AUTO_SCROLL_MAX_STEP_PX = 14
 
@@ -88,6 +93,10 @@ interface FilterNodeDragRuntime {
   previewOrder: string[]
   pointerX: number
   pointerY: number
+}
+
+interface PaletteGuideState extends FloatingInspectorPosition {
+  readonly type: FilterKind
 }
 
 function createFilterId(): string {
@@ -153,6 +162,7 @@ export function FilterLab({
   const inputInfoRef = useRef<HTMLElement>(null)
   const outputTerminalRef = useRef<HTMLDivElement>(null)
   const outputControlsRef = useRef<HTMLElement>(null)
+  const paletteButtonRefs = useRef(new Map<FilterKind, HTMLButtonElement>())
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>())
   const nodeDragGhostRef = useRef<HTMLDivElement>(null)
   const nodeDragRuntimeRef = useRef<FilterNodeDragRuntime | null>(null)
@@ -165,6 +175,7 @@ export function FilterLab({
   const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
   const [dragPreviewOrder, setDragPreviewOrder] = useState<readonly string[] | null>(null)
   const [dragAnnouncement, setDragAnnouncement] = useState('')
+  const [paletteGuide, setPaletteGuide] = useState<PaletteGuideState | null>(null)
   const [inspectorPosition, setInspectorPosition] = useState<FloatingInspectorPosition>({
     left: FLOATING_INSPECTOR_GAP,
     top: 70,
@@ -208,6 +219,31 @@ export function FilterLab({
         ? '上采样'
         : '等采样率'
     : null
+
+  const showPaletteGuide = useCallback((type: FilterKind, target: HTMLButtonElement) => {
+    const grid = gridRef.current
+    if (!grid) return
+    const gridRect = grid.getBoundingClientRect()
+    const targetRect = target.getBoundingClientRect()
+    const position = calculateFloatingInspectorPosition(
+      {
+        left: targetRect.left - gridRect.left,
+        right: targetRect.right - gridRect.left,
+        top: targetRect.top - gridRect.top,
+      },
+      { width: gridRect.width, height: gridRect.height },
+      { width: PALETTE_GUIDE_WIDTH, height: PALETTE_GUIDE_HEIGHT },
+      FLOATING_INSPECTOR_GAP,
+      FLOATING_INSPECTOR_GAP,
+    )
+    setPaletteGuide({ type, ...position })
+  }, [])
+
+  const repositionPaletteGuide = useCallback(() => {
+    if (!paletteGuide) return
+    const target = paletteButtonRefs.current.get(paletteGuide.type)
+    if (target) showPaletteGuide(paletteGuide.type, target)
+  }, [paletteGuide, showPaletteGuide])
 
   const updateInspectorPosition = useCallback(() => {
     if (!effectiveSelectedId || draggingNodeId) return
@@ -540,6 +576,11 @@ export function FilterLab({
   }, [updateInputInfoPosition])
 
   useEffect(() => {
+    window.addEventListener('resize', repositionPaletteGuide)
+    return () => window.removeEventListener('resize', repositionPaletteGuide)
+  }, [repositionPaletteGuide])
+
+  useEffect(() => {
     if (!selected && !inputInfoOpen && !outputControlsOpen && !draggingNodeId) return
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -641,25 +682,57 @@ export function FilterLab({
             <span className="eyebrow">NODE LIBRARY</span>
             <h2>处理节点</h2>
           </div>
-          <div className="filter-palette-list">
+          <div className="filter-palette-list" onScroll={repositionPaletteGuide}>
             {FILTER_TYPES.map((type) => {
               const definition = FILTER_DEFINITIONS[type]
+              const atNodeLimit = filters.length >= MAX_FILTER_NODES
+              const guideOpen = paletteGuide?.type === type
               return (
                 <button
                   key={type}
+                  ref={(node) => {
+                    if (node) paletteButtonRefs.current.set(type, node)
+                    else paletteButtonRefs.current.delete(type)
+                  }}
                   type="button"
-                  disabled={filters.length >= MAX_FILTER_NODES}
-                  onClick={() => addFilter(type)}
+                  aria-disabled={atNodeLimit}
+                  aria-describedby={guideOpen ? `filter-node-guide-${type}` : undefined}
+                  aria-label={atNodeLimit
+                    ? `${definition.label}，已达到 ${MAX_FILTER_NODES} 个节点上限`
+                    : `添加${definition.label}节点`}
+                  data-guide-open={guideOpen ? 'true' : undefined}
+                  onPointerEnter={(event) => showPaletteGuide(type, event.currentTarget)}
+                  onPointerLeave={(event) => {
+                    if (document.activeElement === event.currentTarget) return
+                    setPaletteGuide((current) => current?.type === type ? null : current)
+                  }}
+                  onFocus={(event) => showPaletteGuide(type, event.currentTarget)}
+                  onBlur={(event) => {
+                    if (event.currentTarget.matches(':hover')) return
+                    setPaletteGuide((current) => current?.type === type ? null : current)
+                  }}
+                  onClick={() => {
+                    if (atNodeLimit) return
+                    setPaletteGuide(null)
+                    addFilter(type)
+                  }}
                 >
-                  <span className="filter-palette-icon">{type === 'resampler' ? <Gauge size={14} /> : type === 'equalizer' ? <SlidersHorizontal size={14} /> : <Waves size={14} />}</span>
+                  <span className="filter-palette-icon"><FilterNodeGlyph type={type} /></span>
                   <span><strong>{definition.label}</strong><small>{definition.description}</small></span>
                   <span className="filter-add-mark">+</span>
                 </button>
               )
             })}
           </div>
-          <p className="filter-pane-note">最多 {MAX_FILTER_NODES} 个节点。信号按画布中的顺序从左到右处理。</p>
+          <p className="filter-pane-note">悬停或聚焦节点可查看说明与前后图例。最多 {MAX_FILTER_NODES} 个节点，信号按画布顺序处理。</p>
         </aside>
+
+        {paletteGuide && (
+          <FilterNodeGuidePopover
+            type={paletteGuide.type}
+            style={{ left: paletteGuide.left, top: paletteGuide.top }}
+          />
+        )}
 
         <section className="filter-graph-panel panel-surface" ref={graphPanelRef}>
           <div className="filter-graph-toolbar">

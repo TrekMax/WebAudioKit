@@ -230,7 +230,8 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .filter-graph-toolbar .secondary-button { min-height: 27px; font-size: 9px; }
 .filter-palette-list { min-height: 0; padding: 8px; display: grid; gap: 5px; overflow-y: auto; }
 .filter-palette-list button { min-height: 49px; padding: 7px; display: grid; grid-template-columns: 31px minmax(0,1fr) 18px; align-items: center; gap: 7px; border: 1px solid var(--border); border-radius: 6px; color: var(--muted); background: #0c131c; text-align: left; cursor: pointer; }
-.filter-palette-list button:hover:not(:disabled) { border-color: rgba(31,223,178,0.3); background: #111b25; }
+.filter-palette-list button:hover:not([aria-disabled="true"]), .filter-palette-list button[data-guide-open="true"] { border-color: rgba(31,223,178,0.3); background: #111b25; }
+.filter-palette-list button[aria-disabled="true"] { opacity: 0.42; cursor: not-allowed; }
 .filter-palette-list button > span:nth-child(2), .filter-selected-summary > span:last-child { min-width: 0; display: grid; gap: 3px; }
 .filter-palette-list strong, .filter-selected-summary strong { color: #b8c5d0; font-size: 9px; }
 .filter-palette-list small, .filter-selected-summary small { overflow: hidden; color: var(--faint); font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
@@ -238,6 +239,38 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .filter-add-mark { color: #607082; font-size: 16px; text-align: center; }
 .filter-palette-list button:hover .filter-add-mark { color: var(--accent); }
 .filter-pane-note { margin: auto 10px 10px; padding: 8px; color: #657485; border: 1px solid var(--border); border-radius: 5px; background: #0a1017; font-size: 7px; line-height: 1.5; }
+.filter-node-guide-popover { width: min(340px,calc(100% - 24px)); max-height: calc(100% - 24px); position: absolute; z-index: 20; overflow-y: auto; pointer-events: none; border: 1px solid rgba(55,79,98,0.98); border-radius: 9px; background: rgba(8,14,21,0.985); box-shadow: 0 22px 56px rgba(0,0,0,0.58), 0 0 0 1px rgba(31,223,178,0.07); backdrop-filter: blur(14px); scrollbar-width: thin; scrollbar-color: #32485a #080e15; }
+.filter-node-guide-popover > header { min-height: 51px; padding: 9px 11px; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 9px; border-bottom: 1px solid var(--border); background: linear-gradient(90deg,rgba(31,223,178,0.065),transparent 72%); }
+.filter-node-guide-popover > header > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
+.filter-node-guide-popover > header strong { color: #d0dbe4; font-size: var(--font-body); }
+.filter-node-guide-popover > header small { color: #648176; font-family: var(--mono); font-size: var(--font-micro); letter-spacing: 0.08em; }
+.filter-guide-icon { width: 34px; height: 34px; display: grid; place-items: center; color: var(--accent); border: 1px solid rgba(31,223,178,0.2); border-radius: 6px; background: var(--accent-soft); }
+.filter-guide-badge { padding: 3px 5px; color: #6d827c; border: 1px solid rgba(66,91,84,0.7); border-radius: 999px; font-family: var(--mono); font-size: var(--font-micro); }
+.filter-guide-introduction { margin: 0; padding: 11px 12px 9px; color: #9aa9b6; font-size: var(--font-small); line-height: 1.65; }
+.filter-guide-spectrum { margin: 0 11px; padding: 8px; display: grid; gap: 5px; border: 1px solid rgba(42,59,75,0.88); border-radius: 7px; background: #070c12; }
+.filter-guide-figure-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.filter-guide-figure-heading strong { color: #aebcc8; font-size: var(--font-small); }
+.filter-guide-figure-heading span { color: #596a7a; font-family: var(--mono); font-size: var(--font-micro); }
+.filter-guide-spectrum svg { width: 100%; height: auto; display: block; }
+.filter-guide-plot { fill: #080f17; stroke: rgba(56,75,93,0.62); }
+.filter-guide-grid line, .filter-guide-time-grid { stroke: rgba(56,75,93,0.4); stroke-width: 0.75; vector-effect: non-scaling-stroke; }
+.filter-guide-grid text { fill: #596b7b; font-family: var(--mono); font-size: 8px; text-anchor: end; dominant-baseline: middle; }
+.filter-guide-grid text.frequency { text-anchor: middle; dominant-baseline: auto; }
+.filter-guide-axis-unit { fill: #617383; font-family: var(--mono); font-size: 7px; }
+.filter-guide-axis-unit.frequency { text-anchor: end; }
+.filter-guide-after-area { stroke: none; }
+.filter-guide-before-line, .filter-guide-after-line { fill: none; vector-effect: non-scaling-stroke; }
+.filter-guide-before-line { stroke: #8291a0; stroke-width: 1.35; stroke-dasharray: 3 3; opacity: 0.76; }
+.filter-guide-after-line { stroke: var(--accent); stroke-width: 1.75; filter: drop-shadow(0 0 3px rgba(31,223,178,0.28)); }
+.filter-guide-legend { display: flex; align-items: center; gap: 11px; color: #748595; font-family: var(--mono); font-size: var(--font-micro); }
+.filter-guide-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.filter-guide-legend i { width: 12px; height: 0; border-top: 2px solid; }
+.filter-guide-legend i.before { color: #8291a0; border-top-style: dashed; }
+.filter-guide-legend i.after { color: var(--accent); }
+.filter-guide-legend .overlap { margin-left: auto; color: #536576; }
+.filter-guide-spectrum figcaption { min-height: 30px; padding-top: 5px; color: #708192; border-top: 1px solid rgba(38,52,66,0.72); font-size: var(--font-micro); line-height: 1.45; }
+.filter-guide-parameters { margin: 9px 11px 10px; padding: 8px 9px; display: grid; gap: 3px; color: #7e8f9e; border-left: 2px solid rgba(255,179,92,0.62); background: rgba(255,179,92,0.045); font-size: var(--font-micro); line-height: 1.5; }
+.filter-guide-parameters strong { color: #b49b7c; font-size: var(--font-micro); }
 .filter-graph-panel { display: grid; grid-template-rows: 58px minmax(0,1fr) auto; }
 .filter-graph-canvas { min-width: 0; min-height: 0; position: relative; padding: 35px 26px 70px; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; background-color: #080d14; background-image: linear-gradient(rgba(39,55,69,0.22) 1px, transparent 1px), linear-gradient(90deg, rgba(39,55,69,0.22) 1px, transparent 1px); background-size: 22px 22px; scrollbar-width: thin; scrollbar-color: #2f4254 #090f16; }
 .filter-graph-canvas.dragging { cursor: grabbing; user-select: none; }
