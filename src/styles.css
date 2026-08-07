@@ -255,7 +255,12 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .filter-graph-empty { position: absolute; inset: 0; z-index: 2; pointer-events: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; color: #536475; background: rgba(8,13,20,0.74); }
 .filter-graph-empty strong { color: #9eacb9; font-size: 10px; }
 .filter-graph-empty span { font-size: 8px; }
-.audition-track-preview { min-width: 0; padding: 8px 10px 10px; display: grid; gap: 6px; border-top: 1px solid var(--border); background: #0a1018; }
+.audition-track-preview { min-width: 0; max-height: 60vh; position: relative; padding: 14px 10px 10px; display: grid; gap: 6px; overflow-y: auto; border-top: 1px solid var(--border); background: #0a1018; }
+.track-resize-handle { height: 12px; position: absolute; z-index: 4; top: 0; left: 0; right: 0; display: grid; place-items: center; color: #657788; cursor: ns-resize; touch-action: none; outline: none; }
+.track-resize-handle::before { content: ""; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: #263747; }
+.track-resize-handle svg { z-index: 1; width: 34px; padding: 0 8px; border-radius: 999px; background: #0a1018; }
+.track-resize-handle:hover, .track-resize-handle:focus-visible, .audition-track-preview.resizing .track-resize-handle { color: var(--accent); }
+.track-resize-handle:focus-visible { box-shadow: inset 0 0 0 1px rgba(31,223,178,0.45); }
 .audition-track-preview > header { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 7px 10px; color: #8393a3; }
 .audition-track-preview > header > span:first-child { min-width: 0; display: flex; align-items: center; gap: 6px; }
 .audition-track-preview > header strong { color: #b9c6d1; font-size: var(--font-body); }
@@ -265,13 +270,14 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .audition-view-switch button { min-height: 23px; padding: 0 7px; display: inline-flex; align-items: center; gap: 4px; color: #6f8090; border: 0; border-radius: 3px; background: transparent; font-size: var(--font-micro); cursor: pointer; }
 .audition-view-switch button:hover { color: #a9b8c5; background: #111c26; }
 .audition-view-switch button.active { color: #07120f; background: var(--accent); }
-.track-height-control { display: flex; align-items: center; gap: 5px; color: #718294; font-size: var(--font-micro); }
-.track-height-control input { width: 82px; accent-color: var(--accent); }
-.track-height-control output { width: 35px; color: #9cabb9; font-family: var(--mono); text-align: right; }
+.track-height-readout { display: flex; align-items: center; gap: 5px; color: #718294; font-size: var(--font-micro); }
+.track-height-readout output { min-width: 35px; color: #9cabb9; font-family: var(--mono); text-align: right; }
+.track-height-readout small { color: #526374 !important; font-family: var(--mono); }
 .audition-preview-live { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; color: #637486; font-family: var(--mono); font-size: var(--font-micro); }
 .audition-preview-live.live { color: var(--accent); }
 .audition-track-list { min-width: 0; display: grid; gap: 5px; }
 .audition-track { width: 100%; min-width: 0; min-height: 56px; position: relative; overflow: hidden; padding: 0; border: 1px solid #243444; border-radius: 6px; color: #8291a0; background: #080e15; text-align: left; cursor: pointer; transition: height 120ms ease; }
+.audition-track-preview.resizing .audition-track { transition: none; }
 .audition-track:hover:not(:disabled) { border-color: #3b5267; background: #0b131c; }
 .audition-track.active { border-color: rgba(31,223,178,0.58); box-shadow: inset 3px 0 0 var(--accent), 0 0 0 1px rgba(31,223,178,0.07); }
 .audition-track:disabled { opacity: 0.48; }

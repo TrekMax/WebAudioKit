@@ -1,5 +1,21 @@
 const MAX_PREVIEW_CHANNELS = 2
 const DEFAULT_SAMPLES_PER_COLUMN = 24
+const TRACK_PREVIEW_VIEWPORT_RATIO = 0.6
+const TRACK_PREVIEW_CHROME_HEIGHT = 72
+
+export const MIN_TRACK_LANE_HEIGHT = 56
+
+export function maximumTrackLaneHeight(viewportHeight: number): number {
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) {
+    return MIN_TRACK_LANE_HEIGHT
+  }
+  return Math.max(
+    MIN_TRACK_LANE_HEIGHT,
+    Math.floor(
+      (viewportHeight * TRACK_PREVIEW_VIEWPORT_RATIO - TRACK_PREVIEW_CHROME_HEIGHT) / 2,
+    ),
+  )
+}
 
 export interface TrackOverview {
   readonly mins: Float32Array

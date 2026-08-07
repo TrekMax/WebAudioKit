@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { buildTrackOverview } from './trackPreview'
+import {
+  MIN_TRACK_LANE_HEIGHT,
+  buildTrackOverview,
+  maximumTrackLaneHeight,
+} from './trackPreview'
 
 describe('buildTrackOverview', () => {
   it('creates a bounded multi-channel min/max preview', () => {
@@ -18,5 +22,12 @@ describe('buildTrackOverview', () => {
     expect(Array.from(buildTrackOverview([], 3).maxs)).toEqual([0, 0, 0])
     expect(() => buildTrackOverview([new Float32Array(1)], 0)).toThrow(RangeError)
     expect(() => buildTrackOverview([new Float32Array(1)], 5_000)).toThrow(RangeError)
+  })
+
+  it('caps two lanes and preview chrome within 60% of the viewport', () => {
+    expect(maximumTrackLaneHeight(1_000)).toBe(264)
+    expect(maximumTrackLaneHeight(400)).toBe(84)
+    expect(maximumTrackLaneHeight(100)).toBe(MIN_TRACK_LANE_HEIGHT)
+    expect(maximumTrackLaneHeight(Number.NaN)).toBe(MIN_TRACK_LANE_HEIGHT)
   })
 })

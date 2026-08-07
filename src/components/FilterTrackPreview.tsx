@@ -1,5 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AudioWaveform, MoveVertical, Radio, Waves } from 'lucide-react'
+import type {
+  KeyboardEvent as ReactKeyboardEvent,
+  PointerEvent as ReactPointerEvent,
+} from 'react'
+import { Activity, AudioWaveform, GripHorizontal, MoveVertical, Radio, Waves } from 'lucide-react'
 
 import type { StftPreviewResult } from '../audio/analysis'
 import {
@@ -8,7 +12,12 @@ import {
   type FilterNodeConfig,
 } from '../audio/filterGraph'
 import { useElementSize } from '../hooks/useElementSize'
-import { buildTrackOverview, type TrackOverview } from '../visualization/trackPreview'
+import {
+  MIN_TRACK_LANE_HEIGHT,
+  buildTrackOverview,
+  maximumTrackLaneHeight,
+  type TrackOverview,
+} from '../visualization/trackPreview'
 
 interface FilterTrackPreviewProps {
   readonly buffer: AudioBuffer | null
@@ -22,6 +31,13 @@ interface FilterTrackPreviewProps {
 }
 
 type TrackViewMode = 'waveform' | 'spectrum'
+
+interface TrackResizeSession {
+  readonly pointerId: number
+  readonly startY: number
+  readonly startHeight: number
+  readonly maximumHeight: number
+}
 
 interface TrackLaneProps {
   readonly mode: FilterAuditionMode
@@ -201,7 +217,15 @@ export function FilterTrackPreview({
   onAuditionModeChange,
 }: FilterTrackPreviewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
-  const [trackHeight, setTrackHeight] = useState(72)
+  const resizeSessionRef = useRef<TrackResizeSession | null>(null)
+  const [trackHeight, setTrackHeight] = useState(() => Math.min(
+    72,
+    maximumTrackLaneHeight(typeof window === 'undefined' ? 0 : window.innerHeight),
+  ))
+  const [maximumTrackHeight, setMaximumTrackHeight] = useState(() => (
+    maximumTrackLaneHeight(typeof window === 'undefined' ? 0 : window.innerHeight)
+  ))
+  const [resizing, setResizing] = useState(false)
   const [viewMode, setViewMode] = useState<TrackViewMode>('waveform')
   const size = useElementSize(hostRef)
   const laneWidth = Math.max(0, size.width - 20)
@@ -227,8 +251,90 @@ export function FilterTrackPreview({
     ? `20 Hz–${Number((maximumFrequencyHz / 1_000).toFixed(1))} kHz`
     : `0–${Math.round(maximumFrequencyHz)} Hz`
 
+  useEffect(() => {
+    const handleViewportResize = () => {
+      const maximumHeight = maximumTrackLaneHeight(window.innerHeight)
+      setMaximumTrackHeight(maximumHeight)
+      setTrackHeight((height) => Math.min(height, maximumHeight))
+    }
+    window.addEventListener('resize', handleViewportResize)
+    return () => window.removeEventListener('resize', handleViewportResize)
+  }, [])
+
+  const startTrackResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const maximumHeight = maximumTrackLaneHeight(window.innerHeight)
+    resizeSessionRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: trackHeight,
+      maximumHeight,
+    }
+    setMaximumTrackHeight(maximumHeight)
+    setResizing(true)
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const moveTrackResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const session = resizeSessionRef.current
+    if (!session || session.pointerId !== event.pointerId) return
+    const nextHeight = session.startHeight + session.startY - event.clientY
+    setTrackHeight(Math.max(
+      MIN_TRACK_LANE_HEIGHT,
+      Math.min(session.maximumHeight, Math.round(nextHeight)),
+    ))
+  }
+
+  const finishTrackResize = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const session = resizeSessionRef.current
+    if (!session || session.pointerId !== event.pointerId) return
+    resizeSessionRef.current = null
+    setResizing(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+  }
+
+  const handleResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const increments: Partial<Record<string, number>> = {
+      ArrowUp: 8,
+      ArrowDown: -8,
+      PageUp: 32,
+      PageDown: -32,
+    }
+    const increment = increments[event.key]
+    if (increment !== undefined) {
+      event.preventDefault()
+      setTrackHeight((height) => Math.max(
+        MIN_TRACK_LANE_HEIGHT,
+        Math.min(maximumTrackHeight, height + increment),
+      ))
+      return
+    }
+    if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      setTrackHeight(event.key === 'Home' ? MIN_TRACK_LANE_HEIGHT : maximumTrackHeight)
+    }
+  }
+
   return (
-    <div className="audition-track-preview" ref={hostRef}>
+    <div className={`audition-track-preview ${resizing ? 'resizing' : ''}`} ref={hostRef}>
+      <div
+        className="track-resize-handle"
+        role="separator"
+        tabIndex={0}
+        aria-label="拖拽调整声轨高度，最高为屏幕高度的 60%"
+        aria-orientation="horizontal"
+        aria-valuemin={MIN_TRACK_LANE_HEIGHT}
+        aria-valuemax={maximumTrackHeight}
+        aria-valuenow={trackHeight}
+        title="上下拖拽调整声轨高度（预览最高占屏幕 60%）"
+        onPointerDown={startTrackResize}
+        onPointerMove={moveTrackResize}
+        onPointerUp={finishTrackResize}
+        onPointerCancel={finishTrackResize}
+        onKeyDown={handleResizeKeyDown}
+      ><GripHorizontal size={15} /></div>
       <header>
         <span>{viewMode === 'waveform' ? <AudioWaveform size={14} /> : <Activity size={14} />}<strong>声轨 A/B 试听</strong><small>{viewMode === 'waveform' ? '共享源时间轮廓 · 实时监听路径独立' : '当前播放位置 · B 轨叠加实时节点响应'}</small></span>
         <span className="audition-preview-actions">
@@ -236,20 +342,12 @@ export function FilterTrackPreview({
             <button type="button" className={viewMode === 'waveform' ? 'active' : ''} aria-pressed={viewMode === 'waveform'} onClick={() => setViewMode('waveform')}><AudioWaveform size={12} /> 波形</button>
             <button type="button" className={viewMode === 'spectrum' ? 'active' : ''} aria-pressed={viewMode === 'spectrum'} onClick={() => setViewMode('spectrum')}><Activity size={12} /> 频谱</button>
           </span>
-          <label className="track-height-control">
+          <span className="track-height-readout">
             <MoveVertical size={12} />
-            <span>轨高</span>
-            <input
-              type="range"
-              min={56}
-              max={120}
-              step={8}
-              value={trackHeight}
-              aria-label="声轨高度"
-              onChange={(event) => setTrackHeight(Number(event.target.value))}
-            />
+            <span>拖拽轨高</span>
             <output>{trackHeight}px</output>
-          </label>
+            <small>≤60%</small>
+          </span>
           <span className={`audition-preview-live ${playing ? 'live' : ''}`}><Waves size={12} /> {playing ? 'PLAYING' : 'READY'}</span>
         </span>
       </header>
