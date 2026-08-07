@@ -33,6 +33,10 @@ export interface PlaybackSnapshot {
   readonly loop: boolean
   readonly volume: number
   readonly muted: boolean
+  /** Output enable state for the first stereo pair: left, then right. */
+  readonly outputChannelEnabled: readonly [boolean, boolean]
+  /** Linear stereo balance for the first output pair, from -1 (left) to 1 (right). */
+  readonly outputBalance: number
   /** Per-source-channel playback mute state, indexed from zero. */
   readonly channelMuted: readonly boolean[]
   /** Per-source-channel playback solo state, indexed from zero. */

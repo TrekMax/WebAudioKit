@@ -80,6 +80,8 @@ export class AudioEngine {
   private loop = false
   private volume = 1
   private muted = false
+  private outputChannelEnabled: [boolean, boolean] = [true, true]
+  private outputBalance = 0
   private playbackRate = 1
   private activeSession: PlaybackSession | null = null
   private sessionSequence = 0
@@ -190,6 +192,7 @@ export class AudioEngine {
     this.mergerNode = nextRouting.merger
     this.channelMuted = Array.from({ length: buffer.numberOfChannels }, () => false)
     this.channelSolo = Array.from({ length: buffer.numberOfChannels }, () => false)
+    this.applyChannelGains()
     this.buffer = buffer
     this.assetId = nextAssetId
     this.positionSample = requestedPosition
@@ -458,6 +461,36 @@ export class AudioEngine {
     return this.setMuted(!this.muted)
   }
 
+  setOutputChannelEnabled(channelIndex: 0 | 1, enabled: boolean): PlaybackSnapshot {
+    this.assertNotDisposed()
+    if ((channelIndex !== 0 && channelIndex !== 1) || typeof enabled !== 'boolean') {
+      throw new RangeError('Output channel must be left (0) or right (1) with a boolean state')
+    }
+    if (this.outputChannelEnabled[channelIndex] === enabled) {
+      return this.snapshot()
+    }
+
+    this.outputChannelEnabled[channelIndex] = enabled
+    this.applyChannelGains()
+    this.emit()
+    return this.snapshot()
+  }
+
+  setOutputBalance(balance: number): PlaybackSnapshot {
+    this.assertNotDisposed()
+    if (!Number.isFinite(balance) || balance < -1 || balance > 1) {
+      throw new RangeError('Output balance must be within [-1, 1]')
+    }
+    if (this.outputBalance === balance) {
+      return this.snapshot()
+    }
+
+    this.outputBalance = balance
+    this.applyChannelGains()
+    this.emit()
+    return this.snapshot()
+  }
+
   setChannelMuted(channelIndex: number, muted: boolean): PlaybackSnapshot {
     this.assertNotDisposed()
     this.assertChannelIndex(channelIndex)
@@ -640,6 +673,8 @@ export class AudioEngine {
       loop: this.loop,
       volume: this.volume,
       muted: this.muted,
+      outputChannelEnabled: [...this.outputChannelEnabled],
+      outputBalance: this.outputBalance,
       channelMuted: [...this.channelMuted],
       channelSolo: [...this.channelSolo],
       playbackRate: this.playbackRate,
@@ -809,7 +844,17 @@ export class AudioEngine {
       }
       const audible =
         !this.channelMuted[channelIndex] && (!hasSolo || this.channelSolo[channelIndex])
-      this.rampGain(channelGain.gain, audible ? 1 : 0)
+      let outputGain = 1
+      if (channelIndex === 0) {
+        outputGain = this.outputChannelEnabled[0]
+          ? this.outputBalance > 0 ? 1 - this.outputBalance : 1
+          : 0
+      } else if (channelIndex === 1) {
+        outputGain = this.outputChannelEnabled[1]
+          ? this.outputBalance < 0 ? 1 + this.outputBalance : 1
+          : 0
+      }
+      this.rampGain(channelGain.gain, audible ? outputGain : 0)
     }
   }
 

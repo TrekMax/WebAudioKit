@@ -375,6 +375,65 @@ describe('AudioEngine', () => {
     expect(channelGains.map((gain) => gain.gain.value)).toEqual([1, 1, 1, 1])
   })
 
+  it('applies output enable and stereo balance without changing mute or solo state', async () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+    const initial = engine.load(createAudioBuffer(1_000, 1_000, 4))
+    const channelGains = context.gains.slice(1, 5)
+    await engine.play()
+    const masterCallCount = context.gain.gain.calls.length
+
+    expect(initial).toMatchObject({
+      outputChannelEnabled: [true, true],
+      outputBalance: 0,
+    })
+
+    engine.setChannelMuted(2, true)
+    expect(engine.setOutputBalance(0.5)).toMatchObject({
+      outputChannelEnabled: [true, true],
+      outputBalance: 0.5,
+      channelMuted: [false, false, true, false],
+      channelSolo: [false, false, false, false],
+    })
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([0.5, 1, 0, 1])
+
+    engine.setOutputChannelEnabled(1, false)
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([0.5, 0, 0, 1])
+
+    engine.setChannelSolo(0, true)
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([0.5, 0, 0, 0])
+
+    engine.setOutputChannelEnabled(0, false)
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([0, 0, 0, 0])
+    expect(engine.snapshot()).toMatchObject({
+      outputChannelEnabled: [false, false],
+      channelMuted: [false, false, true, false],
+      channelSolo: [true, false, false, false],
+    })
+    expect(context.sources).toHaveLength(1)
+    expect(context.gain.gain.calls).toHaveLength(masterCallCount)
+  })
+
+  it('preserves output controls across loads and returns immutable snapshots', () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+    engine.setOutputBalance(1)
+    engine.setOutputChannelEnabled(1, false)
+
+    const loaded = engine.load(createAudioBuffer(1_000, 1_000, 2))
+    const channelGains = context.gains.slice(1, 3)
+    expect(loaded).toMatchObject({
+      outputChannelEnabled: [true, false],
+      outputBalance: 1,
+    })
+    expect(channelGains.map((gain) => gain.gain.value)).toEqual([0, 0])
+
+    const mutableCopy = loaded.outputChannelEnabled as unknown as boolean[]
+    mutableCopy[0] = false
+    mutableCopy[1] = true
+    expect(engine.snapshot().outputChannelEnabled).toEqual([true, false])
+  })
+
   it('ramps channel changes without restarting playback or touching the master gain', async () => {
     const context = new FakeAudioContext()
     const engine = new AudioEngine({
@@ -703,6 +762,10 @@ describe('AudioEngine', () => {
     expect(() => engine.seek(1.5)).toThrow(RangeError)
     expect(() => engine.setSelection({ start: 10, end: 10 })).toThrow(RangeError)
     expect(() => engine.setVolume(1.1)).toThrow(RangeError)
+    expect(() => engine.setOutputBalance(-1.1)).toThrow(RangeError)
+    expect(() => engine.setOutputBalance(Number.NaN)).toThrow(RangeError)
+    expect(() => engine.setOutputChannelEnabled(2 as 0, true)).toThrow(RangeError)
+    expect(() => engine.setOutputChannelEnabled(0, 'yes' as unknown as boolean)).toThrow(RangeError)
     expect(() => engine.setPlaybackRate(2.1)).toThrow(RangeError)
     expect(() => engine.setChannelMuted(-1, true)).toThrow(RangeError)
     expect(() => engine.setChannelMuted(2, true)).toThrow(RangeError)

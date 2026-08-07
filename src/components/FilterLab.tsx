@@ -40,9 +40,16 @@ interface FilterLabProps {
   readonly sampleRate: number | null
   readonly spectrum: StftPreviewResult | null
   readonly spectrogram: StftPreviewResult | null
+  readonly volume: number
+  readonly numberOfChannels: number
+  readonly outputChannelEnabled: readonly [boolean, boolean]
+  readonly outputBalance: number
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
   readonly onFiltersChange: (filters: readonly FilterNodeConfig[]) => void
   readonly onAuditionModeChange: (mode: FilterAuditionMode) => void
+  readonly onVolumeChange: (volume: number) => void
+  readonly onOutputChannelEnabledChange: (channelIndex: 0 | 1, enabled: boolean) => void
+  readonly onOutputBalanceChange: (balance: number) => void
 }
 
 const FILTER_TYPES = Object.keys(FILTER_DEFINITIONS) as FilterKind[]
@@ -63,6 +70,11 @@ function formatFrequency(value: number): string {
     : `${Math.round(value)} Hz`
 }
 
+function formatBalance(value: number): string {
+  if (Math.abs(value) < 0.005) return '居中'
+  return `${value < 0 ? '左' : '右'} ${Math.round(Math.abs(value) * 100)}%`
+}
+
 export function FilterLab({
   filters,
   auditionMode,
@@ -73,16 +85,30 @@ export function FilterLab({
   sampleRate,
   spectrum,
   spectrogram,
+  volume,
+  numberOfChannels,
+  outputChannelEnabled,
+  outputBalance,
   getFilterFrequencyResponseDb,
   onFiltersChange,
   onAuditionModeChange,
+  onVolumeChange,
+  onOutputChannelEnabledChange,
+  onOutputBalanceChange,
 }: FilterLabProps) {
   const gridRef = useRef<HTMLElement>(null)
   const graphPanelRef = useRef<HTMLElement>(null)
   const inspectorRef = useRef<HTMLElement>(null)
+  const outputTerminalRef = useRef<HTMLDivElement>(null)
+  const outputControlsRef = useRef<HTMLElement>(null)
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>())
   const [selectedId, setSelectedId] = useState<string | null>(filters[0]?.id ?? null)
+  const [outputControlsOpen, setOutputControlsOpen] = useState(false)
   const [inspectorPosition, setInspectorPosition] = useState<FloatingInspectorPosition>({
+    left: FLOATING_INSPECTOR_GAP,
+    top: 70,
+  })
+  const [outputControlsPosition, setOutputControlsPosition] = useState<FloatingInspectorPosition>({
     left: FLOATING_INSPECTOR_GAP,
     top: 70,
   })
@@ -136,11 +162,47 @@ export function FilterLab({
     ))
   }, [effectiveSelectedId])
 
+  const updateOutputControlsPosition = useCallback(() => {
+    if (!outputControlsOpen) return
+    const grid = gridRef.current
+    const graphPanel = graphPanelRef.current
+    const terminal = outputTerminalRef.current
+    if (!grid || !graphPanel || !terminal) return
+    const gridRect = grid.getBoundingClientRect()
+    const panelRect = graphPanel.getBoundingClientRect()
+    const terminalRect = terminal.getBoundingClientRect()
+    const controlsWidth = outputControlsRef.current?.offsetWidth ?? FLOATING_INSPECTOR_WIDTH
+    const controlsHeight = outputControlsRef.current?.offsetHeight ?? 360
+    const localPosition = calculateFloatingInspectorPosition(
+      {
+        left: terminalRect.left - panelRect.left,
+        right: terminalRect.right - panelRect.left,
+        top: terminalRect.top - panelRect.top,
+      },
+      { width: panelRect.width, height: panelRect.height },
+      { width: controlsWidth, height: controlsHeight },
+      FLOATING_INSPECTOR_GAP,
+    )
+    const left = panelRect.left - gridRect.left + localPosition.left
+    const top = panelRect.top - gridRect.top + localPosition.top
+    setOutputControlsPosition((position) => (
+      Math.abs(position.left - left) < 0.5 && Math.abs(position.top - top) < 0.5
+        ? position
+        : { left, top }
+    ))
+  }, [outputControlsOpen])
+
   useLayoutEffect(() => {
     updateInspectorPosition()
     const frame = window.requestAnimationFrame(updateInspectorPosition)
     return () => window.cancelAnimationFrame(frame)
   }, [nodeLayoutRevision, selected?.type, updateInspectorPosition])
+
+  useLayoutEffect(() => {
+    updateOutputControlsPosition()
+    const frame = window.requestAnimationFrame(updateOutputControlsPosition)
+    return () => window.cancelAnimationFrame(frame)
+  }, [nodeLayoutRevision, updateOutputControlsPosition])
 
   useEffect(() => {
     window.addEventListener('resize', updateInspectorPosition)
@@ -148,13 +210,21 @@ export function FilterLab({
   }, [updateInspectorPosition])
 
   useEffect(() => {
-    if (!selected) return
+    window.addEventListener('resize', updateOutputControlsPosition)
+    return () => window.removeEventListener('resize', updateOutputControlsPosition)
+  }, [updateOutputControlsPosition])
+
+  useEffect(() => {
+    if (!selected && !outputControlsOpen) return
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSelectedId(null)
+      if (event.key === 'Escape') {
+        setSelectedId(null)
+        setOutputControlsOpen(false)
+      }
     }
     window.addEventListener('keydown', closeOnEscape)
     return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [selected])
+  }, [outputControlsOpen, selected])
 
   const addFilter = (type: FilterKind) => {
     if (filters.length >= MAX_FILTER_NODES) return
@@ -164,6 +234,7 @@ export function FilterLab({
       ...filters,
       { ...created, frequencyHz: Math.min(created.frequencyHz, maximumFrequency) },
     ])
+    setOutputControlsOpen(false)
     setSelectedId(id)
   }
 
@@ -261,9 +332,15 @@ export function FilterLab({
           <div
             className="filter-graph-canvas"
             aria-label="串行滤波节点图"
-            onScroll={updateInspectorPosition}
+            onScroll={() => {
+              updateInspectorPosition()
+              updateOutputControlsPosition()
+            }}
             onClick={(event) => {
-              if (!(event.target as Element).closest('.filter-node')) setSelectedId(null)
+              if (!(event.target as Element).closest('.filter-node, .output-node-control-trigger')) {
+                setSelectedId(null)
+                setOutputControlsOpen(false)
+              }
             }}
           >
             <div className="signal-terminal input"><AudioWaveform size={18} /><strong>输入</strong><small>原始 PCM</small></div>
@@ -282,7 +359,10 @@ export function FilterLab({
                     aria-pressed={effectiveSelectedId === filter.id}
                     aria-expanded={effectiveSelectedId === filter.id}
                     aria-controls={effectiveSelectedId === filter.id ? 'floating-node-inspector' : undefined}
-                    onClick={() => setSelectedId(filter.id)}
+                    onClick={() => {
+                      setOutputControlsOpen(false)
+                      setSelectedId(filter.id)
+                    }}
                   >
                     <span className="filter-node-index">{String(index + 1).padStart(2, '0')}</span>
                     <span className="filter-node-type">{definition.label}</span>
@@ -293,7 +373,26 @@ export function FilterLab({
                 </div>
               )
             })}
-            <div className="signal-terminal output"><Volume2 size={18} /><strong>输出</strong><small>监听总线</small></div>
+            <div ref={outputTerminalRef} className="signal-terminal output">
+              <Volume2 size={18} />
+              <strong>输出</strong>
+              <small>监听总线</small>
+              <button
+                type="button"
+                className={`output-node-control-trigger ${outputControlsOpen ? 'active' : ''}`}
+                aria-label="调节输出节点"
+                aria-expanded={outputControlsOpen}
+                aria-controls="output-node-controls"
+                title="调节输出"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  setSelectedId(null)
+                  setOutputControlsOpen((open) => !open)
+                }}
+              >
+                <SlidersHorizontal size={13} />
+              </button>
+            </div>
             {filters.length === 0 && (
               <div className="filter-graph-empty">
                 <SlidersHorizontal size={25} />
@@ -404,6 +503,104 @@ export function FilterLab({
           ) : (
             <div className="filter-inspector-empty"><SlidersHorizontal size={24} /><strong>未选择节点</strong><span>添加或点击画布中的节点以编辑参数。</span></div>
           )}
+        </aside>
+
+        <aside
+          id="output-node-controls"
+          ref={outputControlsRef}
+          role="dialog"
+          aria-modal="false"
+          aria-label="输出节点控制"
+          className={`output-controls-popover panel-surface ${outputControlsOpen ? 'open' : ''}`}
+          style={{ left: outputControlsPosition.left, top: outputControlsPosition.top }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="filter-pane-heading">
+            <div>
+              <span className="eyebrow">OUTPUT CONTROLS</span>
+              <h2>输出控制</h2>
+            </div>
+            <button type="button" className="floating-inspector-close" aria-label="关闭输出控制" onClick={() => setOutputControlsOpen(false)}><X size={14} /></button>
+          </div>
+          <div className="output-controls-form">
+            <div className="output-control-summary">
+              <span className="filter-palette-icon"><Volume2 size={15} /></span>
+              <span><strong>监听总线</strong><small>{numberOfChannels > 0 ? `${numberOfChannels} 声道输入` : '等待音频输入'}</small></span>
+            </div>
+
+            <label className="filter-field output-volume-field">
+              <span>总音量 <output>{Math.round(volume * 100)}%</output></span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={volume}
+                disabled={!hasAudio}
+                onChange={(event) => onVolumeChange(Number(event.target.value))}
+              />
+            </label>
+
+            <fieldset className="output-channel-controls" disabled={!hasAudio}>
+              <legend>左右声道启用</legend>
+              <div>
+                <button
+                  type="button"
+                  className={outputChannelEnabled[0] ? 'active' : ''}
+                  aria-pressed={outputChannelEnabled[0]}
+                  onClick={() => onOutputChannelEnabledChange(0, !outputChannelEnabled[0])}
+                >
+                  <Power size={13} /> <span><strong>L</strong><small>左声道</small></span>
+                </button>
+                <button
+                  type="button"
+                  className={outputChannelEnabled[1] ? 'active' : ''}
+                  aria-pressed={outputChannelEnabled[1]}
+                  disabled={!hasAudio || numberOfChannels < 2}
+                  title={numberOfChannels < 2 ? '当前音频没有右声道' : undefined}
+                  onClick={() => onOutputChannelEnabledChange(1, !outputChannelEnabled[1])}
+                >
+                  <Power size={13} /> <span><strong>R</strong><small>右声道</small></span>
+                </button>
+              </div>
+            </fieldset>
+
+            <div className={`filter-field output-balance-field ${numberOfChannels < 2 ? 'inactive' : ''}`}>
+              <span>立体声平衡 <output>{numberOfChannels < 2 ? '单声道' : formatBalance(outputBalance)}</output></span>
+              <input
+                type="range"
+                min={-1}
+                max={1}
+                step={0.01}
+                value={outputBalance}
+                disabled={!hasAudio || numberOfChannels < 2}
+                aria-label="立体声平衡"
+                onChange={(event) => onOutputBalanceChange(Number(event.target.value))}
+              />
+              <div className="output-balance-presets" aria-label="立体声平衡快捷设置">
+                {([
+                  { label: 'L', value: -1, name: '全左' },
+                  { label: 'C', value: 0, name: '居中复位' },
+                  { label: 'R', value: 1, name: '全右' },
+                ] as const).map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    className={Math.abs(outputBalance - preset.value) < 0.005 ? 'active' : ''}
+                    disabled={!hasAudio || numberOfChannels < 2}
+                    aria-label={preset.name}
+                    aria-pressed={Math.abs(outputBalance - preset.value) < 0.005}
+                    title={preset.name}
+                    onClick={() => onOutputBalanceChange(preset.value)}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <p className="filter-runtime-note">左右控制只作用于前两个监听输出声道；多声道的其余声道保持原增益。它不会改写声道 Mute/Solo、源 PCM、分析结果或导出内容。</p>
+          </div>
         </aside>
       </section>
     </main>

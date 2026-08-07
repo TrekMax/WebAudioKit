@@ -108,6 +108,8 @@ const EMPTY_PLAYBACK: PlaybackSnapshot = {
   loop: false,
   volume: 1,
   muted: false,
+  outputChannelEnabled: [true, true],
+  outputBalance: 0,
   channelMuted: [],
   channelSolo: [],
   playbackRate: 1,
@@ -1429,9 +1431,16 @@ export function App() {
           sampleRate={activeAsset?.buffer.sampleRate ?? null}
           spectrum={realtimeResult ?? realtimeChannelResults[0]?.preview ?? null}
           spectrogram={activeAsset?.analysis ?? null}
+          volume={playback.volume}
+          numberOfChannels={playback.numberOfChannels}
+          outputChannelEnabled={playback.outputChannelEnabled}
+          outputBalance={playback.outputBalance}
           getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
           onFiltersChange={handleFilterChainChange}
           onAuditionModeChange={handleFilterAuditionChange}
+          onVolumeChange={(volume) => ensureEngine().setVolume(volume)}
+          onOutputChannelEnabledChange={(channelIndex, enabled) => ensureEngine().setOutputChannelEnabled(channelIndex, enabled)}
+          onOutputBalanceChange={(balance) => ensureEngine().setOutputBalance(balance)}
         />
       )}
 
