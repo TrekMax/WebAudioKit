@@ -34,3 +34,5 @@ Merger ─┬─> Dry Gain ─────────────────�
 
 - 首版只支持串行链，不支持分支、反馈、任意节点连线或参数自动化。
 - 首版不生成滤波后离线分析或处理后 WAV；若未来增加，必须使用独立 Worker/OfflineAudioContext 管线和显式导出选项。
+
+后续 [`ADR-012`](012-realtime-resampler-node.md) 在同一非破坏式湿声分支中增加实时采样器节点，不改变本 ADR 的源 PCM、分析与导出边界。

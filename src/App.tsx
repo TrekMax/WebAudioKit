@@ -346,6 +346,14 @@ export function App() {
     }
   }, [])
 
+  const getFilterFrequencyResponseDb = useCallback((frequenciesHz: Float32Array) => {
+    try {
+      return engineRef.current?.getFilterFrequencyResponseDb(frequenciesHz) ?? null
+    } catch {
+      return null
+    }
+  }, [])
+
   const handleFilterAuditionChange = useCallback((mode: FilterAuditionMode) => {
     try {
       engineRef.current?.setFilterAudition(mode)
@@ -1415,8 +1423,12 @@ export function App() {
           filters={filterChain}
           auditionMode={filterAuditionMode}
           hasAudio={Boolean(activeAsset)}
+          buffer={activeAsset?.buffer ?? null}
+          currentSample={playback.positionSample}
           playing={playback.kind === 'playing'}
           sampleRate={activeAsset?.buffer.sampleRate ?? null}
+          spectrum={realtimeResult ?? realtimeChannelResults[0]?.preview ?? null}
+          getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
           onFiltersChange={handleFilterChainChange}
           onAuditionModeChange={handleFilterAuditionChange}
         />

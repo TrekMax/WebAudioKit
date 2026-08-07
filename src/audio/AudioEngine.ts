@@ -20,6 +20,7 @@ import {
   type FilterAuditionMode,
   type FilterNodeConfig,
 } from './filterGraph'
+import resamplerWorkletUrl from '../worklets/resampler.worklet.js?worker&url'
 
 const MIN_PLAYBACK_RATE = 0.5
 const MAX_PLAYBACK_RATE = 2
@@ -43,8 +44,11 @@ interface ChannelRouting {
 interface FilterRouting {
   readonly dryGain: GainNode
   readonly filteredGain: GainNode
-  readonly filters: readonly BiquadFilterNode[]
+  readonly filters: readonly AudioNode[]
+  readonly responseFilters: readonly BiquadFilterNode[]
 }
+
+const RESAMPLER_PROCESSOR_NAME = 'webaudio-kit-resampler'
 
 type StateBeforeLock = 'ready' | 'paused' | 'ended'
 
@@ -83,6 +87,7 @@ export class AudioEngine {
   private stateBeforeLock: StateBeforeLock | null = null
   private errorMessage: string | null = null
   private disposed = false
+  private resamplerWorkletReady = false
 
   private readonly handleContextStateChange = (): void => {
     if (this.disposed || !this.buffer) {
@@ -139,6 +144,7 @@ export class AudioEngine {
     this.gainNode.gain.setValueAtTime(1, this.context.currentTime)
     this.gainNode.connect(this.context.destination)
     this.context.addEventListener('statechange', this.handleContextStateChange)
+    this.prepareResamplerWorklet()
   }
 
   get audioContext(): AudioContext {
@@ -544,18 +550,61 @@ export class AudioEngine {
     }
 
     const nextRouting = this.createFilterRouting(filters)
-    const merger = this.mergerNode
-    if (merger) {
-      tryDisconnect(merger)
-      this.connectMergerOutput(merger, nextRouting)
-    }
-    this.releaseFilterRouting()
-    this.filterRouting = nextRouting
+    this.replaceFilterRouting(nextRouting)
     this.filterChain = filters.map((filter) => ({ ...filter }))
   }
 
   getFilterChain(): readonly FilterNodeConfig[] {
     return this.filterChain.map((filter) => ({ ...filter }))
+  }
+
+  getFilterFrequencyResponseDb(frequenciesHz: Float32Array): Float32Array {
+    this.assertNotDisposed()
+    const responseDb = new Float32Array(frequenciesHz.length)
+    const filters = this.filterRouting?.responseFilters
+    if (frequenciesHz.length === 0) {
+      return responseDb
+    }
+
+    const queryFrequenciesHz = new Float32Array(frequenciesHz.length)
+    const nyquist = this.context.sampleRate / 2
+    for (let index = 0; index < frequenciesHz.length; index += 1) {
+      const frequencyHz = frequenciesHz[index]
+      if (frequencyHz === undefined || !Number.isFinite(frequencyHz) || frequencyHz < 0) {
+        throw new RangeError('Filter response frequencies must be finite and non-negative')
+      }
+      queryFrequenciesHz[index] = Math.min(frequencyHz, nyquist)
+    }
+
+    const magnitude = new Float32Array(frequenciesHz.length)
+    const phase = new Float32Array(frequenciesHz.length)
+    for (const filter of filters ?? []) {
+      filter.getFrequencyResponse(queryFrequenciesHz, magnitude, phase)
+      for (let index = 0; index < responseDb.length; index += 1) {
+        const value = magnitude[index]
+        if (value === undefined || !Number.isFinite(value)) continue
+        responseDb[index] = (responseDb[index] ?? 0) + 20 * Math.log10(Math.max(value, 1e-12))
+      }
+    }
+    for (const filter of this.filterChain) {
+      if (!filter.enabled || filter.type !== 'resampler') continue
+      const targetSampleRateHz = Math.min(filter.targetSampleRateHz, this.context.sampleRate)
+      if (targetSampleRateHz >= this.context.sampleRate) continue
+      const cutoffHz = Math.min(this.context.sampleRate * 0.45, targetSampleRateHz * 0.45)
+      const alpha = 1 - Math.exp((-2 * Math.PI * cutoffHz) / this.context.sampleRate)
+      const feedback = 1 - alpha
+      for (let index = 0; index < responseDb.length; index += 1) {
+        const frequencyHz = queryFrequenciesHz[index] ?? 0
+        const omega = (2 * Math.PI * frequencyHz) / this.context.sampleRate
+        const denominator = Math.sqrt(
+          1 + feedback * feedback - 2 * feedback * Math.cos(omega),
+        )
+        const filterMagnitude = alpha / Math.max(denominator, 1e-12)
+        responseDb[index] = (responseDb[index] ?? 0)
+          + 20 * Math.log10(Math.max(filterMagnitude, 1e-12))
+      }
+    }
+    return responseDb
   }
 
   setFilterAudition(mode: FilterAuditionMode): void {
@@ -835,7 +884,15 @@ export class AudioEngine {
   }
 
   private createFilterRouting(filters: readonly FilterNodeConfig[]): FilterRouting {
-    const compiled = compileFilterChain(this.context, filters)
+    const activeFilters = filters.filter((filter) => filter.enabled)
+    const compiled = compileFilterChain(
+      this.context,
+      filters,
+      (filter) => this.createResamplerNode(filter),
+    )
+    const responseFilters = compiled.flatMap((node, index) => (
+      activeFilters[index]?.type === 'resampler' ? [] : [node as BiquadFilterNode]
+    ))
     let dryGain: GainNode | null = null
     let filteredGain: GainNode | null = null
 
@@ -851,7 +908,7 @@ export class AudioEngine {
         compiled[index]?.connect(compiled[index + 1]!)
       }
       compiled.at(-1)?.connect(filteredGain)
-      return { dryGain, filteredGain, filters: compiled }
+      return { dryGain, filteredGain, filters: compiled, responseFilters }
     } catch (error) {
       for (const node of compiled) tryDisconnect(node)
       if (dryGain) tryDisconnect(dryGain)
@@ -880,10 +937,76 @@ export class AudioEngine {
   private releaseFilterRouting(): void {
     const routing = this.filterRouting
     this.filterRouting = null
+    this.releaseRouting(routing)
+  }
+
+  private releaseRouting(routing: FilterRouting | null): void {
     if (!routing) return
     for (const filter of routing.filters) tryDisconnect(filter)
     tryDisconnect(routing.dryGain)
     tryDisconnect(routing.filteredGain)
+  }
+
+  private replaceFilterRouting(nextRouting: FilterRouting): void {
+    const merger = this.mergerNode
+    const previousRouting = this.filterRouting
+    if (merger) {
+      try {
+        tryDisconnect(merger)
+        this.connectMergerOutput(merger, nextRouting)
+      } catch (error) {
+        tryDisconnect(merger)
+        try {
+          this.connectMergerOutput(merger, previousRouting)
+        } catch {
+          // Preserve the original graph objects for disposal even if reconnecting fails.
+        }
+        this.releaseRouting(nextRouting)
+        throw error
+      }
+    }
+    this.releaseFilterRouting()
+    this.filterRouting = nextRouting
+  }
+
+  private prepareResamplerWorklet(): void {
+    if (typeof AudioWorkletNode === 'undefined' || !this.context.audioWorklet) return
+    void this.context.audioWorklet.addModule(resamplerWorkletUrl).then(() => {
+      if (this.disposed) return
+      this.resamplerWorkletReady = true
+      this.rebuildResamplerRouting()
+    }).catch(() => {
+      // The graph keeps a transparent GainNode fallback when AudioWorklet is unavailable.
+    })
+  }
+
+  private createResamplerNode(filter: FilterNodeConfig): AudioNode {
+    if (!this.resamplerWorkletReady) {
+      const fallback = this.context.createGain()
+      fallback.gain.setValueAtTime(1, this.context.currentTime)
+      return fallback
+    }
+    return new AudioWorkletNode(this.context, RESAMPLER_PROCESSOR_NAME, {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCountMode: 'max',
+      parameterData: { targetSampleRateHz: filter.targetSampleRateHz },
+    })
+  }
+
+  private rebuildResamplerRouting(): void {
+    if (!this.filterChain.some((filter) => filter.enabled && filter.type === 'resampler')) return
+    let nextRouting: FilterRouting
+    try {
+      nextRouting = this.createFilterRouting(this.filterChain)
+    } catch {
+      return
+    }
+    try {
+      this.replaceFilterRouting(nextRouting)
+    } catch {
+      // Keep the transparent fallback route if the worklet graph cannot be attached.
+    }
   }
 
   private assertChannelIndex(channelIndex: number): void {

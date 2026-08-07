@@ -92,6 +92,7 @@ class FakeChannelMergerNode {
 
 class FakeBiquadFilterNode {
   type: BiquadFilterType = 'lowpass'
+  responseMagnitude = 0.5
   readonly frequency = new FakeAudioParam()
   readonly Q = new FakeAudioParam()
   readonly gain = new FakeAudioParam()
@@ -105,6 +106,15 @@ class FakeBiquadFilterNode {
 
   disconnect(): void {
     this.disconnected = true
+  }
+
+  getFrequencyResponse(
+    _frequencyHz: Float32Array,
+    magnitude: Float32Array,
+    phase: Float32Array,
+  ): void {
+    magnitude.fill(this.responseMagnitude)
+    phase.fill(0)
   }
 }
 
@@ -143,6 +153,7 @@ class FakeBufferSourceNode {
 
 class FakeAudioContext {
   currentTime = 0
+  readonly sampleRate = 48_000
   state: AudioContextState
   readonly destination = {} as AudioDestinationNode
   readonly gains: FakeGainNode[] = []
@@ -424,6 +435,44 @@ describe('AudioEngine', () => {
     expect(context.sources).toHaveLength(1)
     expect(source).toMatchObject({ stopped: false, disconnected: false })
     expect(engine.getFilterAudition()).toBe('filtered')
+  })
+
+  it('combines compiled filter magnitude responses in decibels', () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+    engine.setFilterChain([
+      createFilterNodeConfig('highpass', 'remove-rumble'),
+      { ...createFilterNodeConfig('notch', 'bypass-hum'), enabled: false },
+      createFilterNodeConfig('peaking', 'presence'),
+    ])
+
+    const response = engine.getFilterFrequencyResponseDb(
+      new Float32Array([0, 1_000, 24_000, 48_000]),
+    )
+
+    expect(response).toHaveLength(4)
+    expect(Array.from(response)).toEqual(
+      expect.arrayContaining([
+        expect.closeTo(20 * Math.log10(0.25), 5),
+      ]),
+    )
+    expect(Array.from(response).every((value) => value === response[0])).toBe(true)
+  })
+
+  it('includes the resampler anti-alias response in spectrum previews', () => {
+    const engine = createEngine(new FakeAudioContext())
+    engine.setFilterChain([{
+      ...createFilterNodeConfig('resampler', 'rate'),
+      targetSampleRateHz: 12_000,
+    }])
+
+    const response = engine.getFilterFrequencyResponseDb(
+      new Float32Array([0, 1_000, 10_000, 20_000]),
+    )
+
+    expect(response[0]).toBeCloseTo(0, 5)
+    expect(response[2]).toBeLessThan(response[1] ?? 0)
+    expect(response[3]).toBeLessThan(response[2] ?? 0)
   })
 
   it('releases replaced filter nodes and keeps exposed configuration immutable', () => {

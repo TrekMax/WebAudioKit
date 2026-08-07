@@ -40,6 +40,16 @@ class FakeFilterContext {
   }
 }
 
+class FakeResamplerNode {
+  readonly targetSampleRateHz = new FakeAudioParam()
+  readonly parameters = new Map([['targetSampleRateHz', this.targetSampleRateHz]])
+  disconnected = false
+
+  disconnect(): void {
+    this.disconnected = true
+  }
+}
+
 describe('filter graph compiler', () => {
   it('creates valid defaults for every supported filter type', () => {
     const kinds = Object.keys(FILTER_DEFINITIONS) as FilterKind[]
@@ -48,6 +58,9 @@ describe('filter graph compiler', () => {
     expect(validateFilterChain(filters)).toBe(filters)
     expect(filters.map((filter) => filter.type)).toEqual(kinds)
     expect(filters.every((filter) => filter.enabled)).toBe(true)
+    expect(createFilterNodeConfig('resampler', 'rate')).toMatchObject({
+      targetSampleRateHz: 24_000,
+    })
   })
 
   it('compiles enabled nodes in order and applies their parameters', () => {
@@ -75,6 +88,24 @@ describe('filter graph compiler', () => {
     })
   })
 
+  it('delegates resampler construction and applies its target sample rate', () => {
+    const context = new FakeFilterContext()
+    const resampler = new FakeResamplerNode()
+    const filter = {
+      ...createFilterNodeConfig('resampler', 'rate'),
+      targetSampleRateHz: 16_000,
+    }
+
+    const compiled = compileFilterChain(
+      context,
+      [filter],
+      () => resampler as unknown as AudioNode,
+    )
+
+    expect(compiled).toEqual([resampler])
+    expect(resampler.targetSampleRateHz.value).toBe(16_000)
+  })
+
   it('rejects duplicate ids and unsafe parameter ranges', () => {
     const lowpass = createFilterNodeConfig('lowpass', 'same')
 
@@ -82,5 +113,9 @@ describe('filter graph compiler', () => {
     expect(() => validateFilterChain([{ ...lowpass, frequencyHz: 0 }])).toThrow('frequency')
     expect(() => validateFilterChain([{ ...lowpass, q: Number.NaN }])).toThrow('Filter Q')
     expect(() => validateFilterChain([{ ...lowpass, gainDb: 41 }])).toThrow('gain')
+    expect(() => validateFilterChain([{
+      ...createFilterNodeConfig('resampler', 'rate'),
+      targetSampleRateHz: 2_999,
+    }])).toThrow('sample rate')
   })
 })

@@ -9,6 +9,7 @@ export type FilterKind =
   | 'lowshelf'
   | 'highshelf'
   | 'allpass'
+  | 'resampler'
 
 export type FilterAuditionMode = 'original' | 'filtered'
 
@@ -19,6 +20,7 @@ export interface FilterNodeConfig {
   readonly frequencyHz: number
   readonly q: number
   readonly gainDb: number
+  readonly targetSampleRateHz: number
 }
 
 export interface FilterDefinition {
@@ -29,6 +31,7 @@ export interface FilterDefinition {
   readonly defaultGainDb: number
   readonly usesQ: boolean
   readonly usesGain: boolean
+  readonly processingKind: 'biquad' | 'resampler'
 }
 
 export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> = {
@@ -40,6 +43,7 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
     defaultGainDb: 0,
     usesQ: true,
     usesGain: false,
+    processingKind: 'biquad',
   },
   highpass: {
     label: '高通',
@@ -49,6 +53,7 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
     defaultGainDb: 0,
     usesQ: true,
     usesGain: false,
+    processingKind: 'biquad',
   },
   bandpass: {
     label: '带通',
@@ -58,6 +63,7 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
     defaultGainDb: 0,
     usesQ: true,
     usesGain: false,
+    processingKind: 'biquad',
   },
   notch: {
     label: '陷波',
@@ -67,6 +73,7 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
     defaultGainDb: 0,
     usesQ: true,
     usesGain: false,
+    processingKind: 'biquad',
   },
   peaking: {
     label: '峰值',
@@ -76,6 +83,7 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
     defaultGainDb: 3,
     usesQ: true,
     usesGain: true,
+    processingKind: 'biquad',
   },
   lowshelf: {
     label: '低架',
@@ -85,6 +93,7 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
     defaultGainDb: 3,
     usesQ: false,
     usesGain: true,
+    processingKind: 'biquad',
   },
   highshelf: {
     label: '高架',
@@ -94,6 +103,7 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
     defaultGainDb: 3,
     usesQ: false,
     usesGain: true,
+    processingKind: 'biquad',
   },
   allpass: {
     label: '全通',
@@ -103,6 +113,17 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
     defaultGainDb: 0,
     usesQ: true,
     usesGain: false,
+    processingKind: 'biquad',
+  },
+  resampler: {
+    label: '采样器',
+    description: '实时上采样或抗混叠下采样',
+    defaultFrequencyHz: 1_000,
+    defaultQ: Math.SQRT1_2,
+    defaultGainDb: 0,
+    usesQ: false,
+    usesGain: false,
+    processingKind: 'resampler',
   },
 }
 
@@ -120,6 +141,7 @@ export function createFilterNodeConfig(type: FilterKind, id: string): FilterNode
     frequencyHz: definition.defaultFrequencyHz,
     q: definition.defaultQ,
     gainDb: definition.defaultGainDb,
+    targetSampleRateHz: 24_000,
   }
 }
 
@@ -154,6 +176,16 @@ export function validateFilterChain(
     if (!Number.isFinite(filter.gainDb) || filter.gainDb < -40 || filter.gainDb > 40) {
       throw new RangeError('Filter gain must be within [-40, 40] dB')
     }
+    if (
+      filter.type === 'resampler'
+      && (
+        !Number.isFinite(filter.targetSampleRateHz)
+        || filter.targetSampleRateHz < 3_000
+        || filter.targetSampleRateHz > 192_000
+      )
+    ) {
+      throw new RangeError('Resampler target sample rate must be within [3000, 192000] Hz')
+    }
   }
 
   return filters
@@ -166,14 +198,20 @@ export function validateFilterChain(
 export function compileFilterChain(
   context: Pick<BaseAudioContext, 'createBiquadFilter' | 'currentTime'>,
   filters: readonly FilterNodeConfig[],
-): BiquadFilterNode[] {
+  createResamplerNode?: (filter: FilterNodeConfig) => AudioNode,
+): AudioNode[] {
   validateFilterChain(filters)
-  const compiled: BiquadFilterNode[] = []
+  const compiled: AudioNode[] = []
 
   try {
     for (const filter of filters) {
       if (!filter.enabled) continue
-      const node = context.createBiquadFilter()
+      const node = filter.type === 'resampler'
+        ? createResamplerNode?.(filter)
+        : context.createBiquadFilter()
+      if (!node) {
+        throw new Error('Resampler node factory is unavailable')
+      }
       compiled.push(node)
       applyFilterNodeConfig(node, filter, context.currentTime)
     }
@@ -191,12 +229,18 @@ export function compileFilterChain(
 }
 
 export function applyFilterNodeConfig(
-  node: BiquadFilterNode,
+  node: AudioNode,
   filter: FilterNodeConfig,
   time: number,
 ): void {
-  node.type = filter.type
-  node.frequency.setValueAtTime(filter.frequencyHz, time)
-  node.Q.setValueAtTime(filter.q, time)
-  node.gain.setValueAtTime(filter.gainDb, time)
+  if (filter.type === 'resampler') {
+    const parameter = (node as AudioWorkletNode).parameters?.get('targetSampleRateHz')
+    parameter?.setValueAtTime(filter.targetSampleRateHz, time)
+    return
+  }
+  const biquad = node as BiquadFilterNode
+  biquad.type = filter.type
+  biquad.frequency.setValueAtTime(filter.frequencyHz, time)
+  biquad.Q.setValueAtTime(filter.q, time)
+  biquad.gain.setValueAtTime(filter.gainDb, time)
 }

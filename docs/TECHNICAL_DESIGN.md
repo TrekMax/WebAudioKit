@@ -330,7 +330,7 @@ idle
 ```text
                                       ┌─> Channel Gain 0 ─┐              ┌─> Dry Gain ───────────────┐
 AudioBufferSourceNode ─> Splitter ────┼─> Channel Gain … ─┼─> Merger ───┤                              ├─> Master Gain ─> destination
-                                      └─> Channel Gain N ─┘              └─> Biquad chain ─> Wet Gain ┘
+                                      └─> Channel Gain N ─┘              └─> Effect chain ─> Wet Gain ┘
 ```
 
 `AudioBufferSourceNode` 是一次性节点。每次播放、跳转或倍速变更均创建新 source；停止后立即断开旧节点。Splitter/Gain/Merger 路由随活动资源创建并在卸载时成对断开，source 仅接入该稳定路由。Master Gain 继续承载全局音量与静音。
@@ -339,7 +339,9 @@ AudioBufferSourceNode ─> Splitter ────┼─> Channel Gain … ─┼�
 
 播放图不依赖 `AnalyserNode` 生成权威 FFT，以保证实时与离线频谱使用相同窗函数和幅度标定。Mute/Solo 不回写源 PCM，也不进入分析或导出管线。
 
-滤波选项页可在 Merger 后编译一条有序 BiquadFilter 串行链。干声与湿声分支同时连接到 Master Gain，A/B 试听仅对两条分支的 GainNode 做短斜坡切换，不重建 AudioBufferSourceNode。节点增删、排序、类型或参数变化时在主线程控制路径创建新链，切换连接后断开并释放旧节点；该过程不在 AudioWorklet 或音频渲染回调内执行。滤波链只属于监听图，不进入原始 PCM、权威 FFT/STFT、峰值和导出管线。
+滤波选项页可在 Merger 后编译一条有序监听效果链。基础滤波编译为 BiquadFilterNode；采样器编译为 AudioWorkletNode，在输出上下文固定采样率内模拟目标采样率：下采样先以有界一阶低通抗混叠再抽取/保持，上采样依赖 Web Audio 对输入源的上下文采样率转换且不虚构超过上下文 Nyquist 的信息。Worklet 构造时预分配最多 32 声道的状态，`process()` 不执行 I/O、日志、Promise、动态导入或数组扩容；能力缺失或模块加载失败时以透明 GainNode 旁路。
+
+干声与湿声分支同时连接到 Master Gain，A/B 试听仅对两条分支的 GainNode 做短斜坡切换，不重建 AudioBufferSourceNode。节点增删、排序、类型或参数变化时在主线程控制路径创建新链，切换连接后断开并释放旧节点；只有采样器的固定成本逐采样内核进入实时渲染回调。效果链只属于监听图，不进入原始 PCM、权威 FFT/STFT、峰值和导出管线。双声轨预览共享源时间轮廓；频谱模式对 A 使用当前位置源 STFT，对 B 叠加 BiquadFilterNode 的实际幅频响应与采样器抗混叠响应，不将其冒充为效果后权威 STFT。
 
 ### 7.2 播放状态
 
@@ -906,7 +908,7 @@ Web Audio 集成可用 `OfflineAudioContext` 验证音频图；状态机单测�
 ### ADR-006：音频实时渲染线程不承担重型分析
 
 - **状态**：Accepted
-- **决定**：MVP 不使用 AudioWorklet 执行 FFT/STFT；未来 Worklet 只负责采集/ring buffer 等实时安全工作。
+- **决定**：MVP 不使用 AudioWorklet 执行 FFT/STFT；Worklet 仅负责采集/ring buffer 或采样率转换等固定成本、预分配的流式工作。
 - **原因**：避免分配、GC 或重计算导致音频 underrun。
 - **代价**：文件实时频谱以播放位置采样，不能代表未来任意效果链的最终输出。
 
@@ -945,6 +947,14 @@ Web Audio 集成可用 `OfflineAudioContext` 验证音频图；状态机单测�
 - **决定**：在多声道合并后编译串行 BiquadFilter 链，以干/湿双分支提供原音与滤波结果 A/B 试听。
 - **原因**：允许快速比较不同滤波设置，同时保持源 PCM、分析与导出语义不变。
 - **代价**：首版只提供串行基础滤波，不提供任意图拓扑、离线处理或效果后分析。
+
+### ADR-012：采样率转换只模拟非破坏式监听效果
+
+- **状态**：Accepted
+- **记录**：[`docs/adr/012-realtime-resampler-node.md`](adr/012-realtime-resampler-node.md)
+- **决定**：采样器节点在 AudioWorklet 内执行固定成本的抗混叠与抽取/保持，并始终输出 AudioContext 的固定采样率。
+- **原因**：Web Audio 中间节点不能改变上下文输出采样率；监听效果仍需保持播放时长、源 PCM 和导出语义不变。
+- **代价**：上采样不产生超过上下文 Nyquist 的新信息，且该节点不是离线高质量重采样或导出重采样功能。
 
 ## 24. 实施顺序与技术验收门
 
