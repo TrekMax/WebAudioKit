@@ -496,6 +496,26 @@ describe('AudioEngine', () => {
     expect(engine.getFilterAudition()).toBe('filtered')
   })
 
+  it('rebuilds a reordered active filter chain without restarting playback', async () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+    const lowpass = createFilterNodeConfig('lowpass', 'lowpass')
+    const highpass = createFilterNodeConfig('highpass', 'highpass')
+    engine.load(createAudioBuffer())
+    await engine.play()
+    const source = context.sources[0]
+
+    engine.setFilterChain([lowpass, highpass])
+    const previousFilters = context.filters.slice(0, 2)
+    engine.setFilterChain([highpass, lowpass])
+
+    expect(previousFilters.every((filter) => filter.disconnected)).toBe(true)
+    expect(context.filters.slice(2).map((filter) => filter.type)).toEqual(['highpass', 'lowpass'])
+    expect(engine.getFilterChain().map((filter) => filter.id)).toEqual(['highpass', 'lowpass'])
+    expect(context.sources).toHaveLength(1)
+    expect(source).toMatchObject({ stopped: false, disconnected: false })
+  })
+
   it('combines compiled filter magnitude responses in decibels', () => {
     const context = new FakeAudioContext()
     const engine = createEngine(context)

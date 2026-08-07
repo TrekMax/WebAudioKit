@@ -27,6 +27,7 @@
 }
 
 * { box-sizing: border-box; }
+.visually-hidden { width: 1px; height: 1px; position: absolute; overflow: hidden; padding: 0; margin: -1px; border: 0; clip: rect(0 0 0 0); white-space: nowrap; }
 
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 
@@ -239,6 +240,7 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .filter-pane-note { margin: auto 10px 10px; padding: 8px; color: #657485; border: 1px solid var(--border); border-radius: 5px; background: #0a1017; font-size: 7px; line-height: 1.5; }
 .filter-graph-panel { display: grid; grid-template-rows: 58px minmax(0,1fr) auto; }
 .filter-graph-canvas { min-width: 0; min-height: 0; position: relative; padding: 35px 26px 70px; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; background-color: #080d14; background-image: linear-gradient(rgba(39,55,69,0.22) 1px, transparent 1px), linear-gradient(90deg, rgba(39,55,69,0.22) 1px, transparent 1px); background-size: 22px 22px; scrollbar-width: thin; scrollbar-color: #2f4254 #090f16; }
+.filter-graph-canvas.dragging { cursor: grabbing; user-select: none; }
 .signal-terminal, .filter-node { flex: 0 0 auto; width: 94px; height: 96px; padding: 11px 9px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; border: 1px solid #2a3a4b; border-radius: 8px; background: linear-gradient(145deg,#111a24,#0b1119); box-shadow: 0 8px 24px rgba(0,0,0,0.22); }
 .signal-terminal { position: relative; color: #7f91a2; }
 .signal-terminal svg { color: var(--accent); }
@@ -253,14 +255,24 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .output-node-control-trigger:focus-visible { opacity: 1; outline: 2px solid rgba(255,179,92,0.42); outline-offset: 2px; }
 .output-node-control-trigger svg { color: currentColor !important; }
 .filter-node-wrap { display: flex; align-items: center; flex: 0 0 auto; }
+.filter-node-wrap.dragging .signal-connector { opacity: 0.38; }
 .signal-connector { width: 42px; flex: 0 0 42px; display: grid; place-items: center; position: relative; color: #395065; }
 .signal-connector::before { content: ""; position: absolute; left: 0; right: 0; height: 1px; background: #2d4357; }
 .signal-connector svg { z-index: 1; padding: 2px; background: #080d14; }
 .filter-node { position: relative; color: #718294; cursor: pointer; }
 .filter-node:hover { border-color: #3b5368; background: linear-gradient(145deg,#14212c,#0d151e); }
 .filter-node.selected { border-color: rgba(31,223,178,0.6); box-shadow: 0 0 0 2px rgba(31,223,178,0.08), 0 10px 30px rgba(0,0,0,0.28); }
+.filter-node.dragging { opacity: 0.16; border-style: dashed; cursor: grabbing; transform: scale(0.98); }
 .filter-node.bypassed { opacity: 0.52; border-style: dashed; }
+.filter-node.dragging.bypassed { opacity: 0.16; }
 .filter-node-index { position: absolute; top: 6px; left: 7px; color: #536579; font-family: var(--mono); font-size: 7px; }
+.filter-node-drag-handle { width: 22px; height: 22px; position: absolute; top: 3px; right: 3px; display: grid; place-items: center; color: #607184; border-radius: 4px; opacity: 0.42; cursor: grab; touch-action: none; }
+.filter-node:hover .filter-node-drag-handle, .filter-node.selected .filter-node-drag-handle { color: var(--accent); opacity: 0.9; background: rgba(31,223,178,0.07); }
+.filter-node-drag-handle:active { cursor: grabbing; }
+.filter-node-drag-handle svg { pointer-events: none; }
+.filter-node-drag-ghost { --drag-tilt: 0deg; width: 94px; height: 96px; position: absolute; z-index: 6; top: 0; left: 0; pointer-events: none; will-change: transform; }
+.filter-node-drag-ghost-card { margin: 0; opacity: 1 !important; border-color: rgba(31,223,178,0.72); cursor: grabbing; transform: rotate(var(--drag-tilt)) scale(1.045); transition: transform 110ms cubic-bezier(0.2,0.85,0.28,1.2); box-shadow: 0 18px 42px rgba(0,0,0,0.46), 0 0 0 2px rgba(31,223,178,0.1); animation: filter-node-drag-lift 150ms ease-out; }
+.filter-node-drag-ghost-card.bypassed { opacity: 0.82 !important; }
 .filter-node-type { color: var(--accent); font-size: 9px; }
 .filter-node strong { color: #c0cbd4; font-family: var(--mono); font-size: 10px; }
 .filter-node small { color: #607184; font-family: var(--mono); font-size: 7px; letter-spacing: 0.1em; }
@@ -436,6 +448,7 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { opacity: 0.4; } }
+@keyframes filter-node-drag-lift { from { opacity: 0.55; filter: brightness(0.82); } to { opacity: 1; filter: brightness(1); } }
 
 @media (max-width: 1180px) {
   .app-main { grid-template-columns: 190px minmax(540px, 1fr) 244px; }
