@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent } from 'react'
 import {
   ArrowLeft,
   ArrowRight,
@@ -6,6 +7,7 @@ import {
   Cable,
   CheckCircle2,
   Gauge,
+  GripVertical,
   Power,
   RotateCcw,
   SlidersHorizontal,
@@ -30,6 +32,11 @@ import {
   calculateFloatingInspectorPosition,
   type FloatingInspectorPosition,
 } from './floatingInspector'
+import {
+  calculateConstrainedDragGhostPosition,
+  nodeOrdersEqual,
+  reorderNodeIds,
+} from './filterNodeDrag'
 
 interface FilterLabProps {
   readonly filters: readonly FilterNodeConfig[]
@@ -67,6 +74,18 @@ interface FilterLabProps {
 const FILTER_TYPES = Object.keys(FILTER_DEFINITIONS) as FilterKind[]
 const FLOATING_INSPECTOR_GAP = 12
 const FLOATING_INSPECTOR_WIDTH = 300
+const DRAG_AUTO_SCROLL_EDGE_PX = 56
+const DRAG_AUTO_SCROLL_MAX_STEP_PX = 14
+
+interface FilterNodeDragRuntime {
+  readonly draggedId: string
+  readonly pointerId: number
+  readonly originalOrder: readonly string[]
+  readonly captureTarget: HTMLDivElement
+  previewOrder: string[]
+  pointerX: number
+  pointerY: number
+}
 
 function createFilterId(): string {
   return `filter-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
@@ -124,15 +143,24 @@ export function FilterLab({
 }: FilterLabProps) {
   const gridRef = useRef<HTMLElement>(null)
   const graphPanelRef = useRef<HTMLElement>(null)
+  const graphCanvasRef = useRef<HTMLDivElement>(null)
   const inspectorRef = useRef<HTMLElement>(null)
   const inputTerminalRef = useRef<HTMLButtonElement>(null)
   const inputInfoRef = useRef<HTMLElement>(null)
   const outputTerminalRef = useRef<HTMLDivElement>(null)
   const outputControlsRef = useRef<HTMLElement>(null)
   const nodeRefs = useRef(new Map<string, HTMLButtonElement>())
+  const nodeDragGhostRef = useRef<HTMLDivElement>(null)
+  const nodeDragRuntimeRef = useRef<FilterNodeDragRuntime | null>(null)
+  const nodeDragAutoScrollFrameRef = useRef<number | null>(null)
+  const suppressedNodeClickRef = useRef<string | null>(null)
+  const suppressedNodeClickTimerRef = useRef<number | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(filters[0]?.id ?? null)
   const [inputInfoOpen, setInputInfoOpen] = useState(false)
   const [outputControlsOpen, setOutputControlsOpen] = useState(false)
+  const [draggingNodeId, setDraggingNodeId] = useState<string | null>(null)
+  const [dragPreviewOrder, setDragPreviewOrder] = useState<readonly string[] | null>(null)
+  const [dragAnnouncement, setDragAnnouncement] = useState('')
   const [inspectorPosition, setInspectorPosition] = useState<FloatingInspectorPosition>({
     left: FLOATING_INSPECTOR_GAP,
     top: 70,
@@ -145,6 +173,18 @@ export function FilterLab({
     left: FLOATING_INSPECTOR_GAP,
     top: 70,
   })
+  const displayedFilters = useMemo(() => {
+    if (!dragPreviewOrder) return filters
+    const filtersById = new Map(filters.map((filter) => [filter.id, filter]))
+    const preview = dragPreviewOrder.flatMap((id) => {
+      const filter = filtersById.get(id)
+      return filter ? [filter] : []
+    })
+    return preview.length === filters.length ? preview : filters
+  }, [dragPreviewOrder, filters])
+  const draggedFilter = draggingNodeId
+    ? filters.find((filter) => filter.id === draggingNodeId) ?? null
+    : null
   const effectiveSelectedId = selectedId && filters.some((filter) => filter.id === selectedId)
     ? selectedId
     : null
@@ -152,7 +192,7 @@ export function FilterLab({
     () => filters.find((filter) => filter.id === effectiveSelectedId) ?? null,
     [effectiveSelectedId, filters],
   )
-  const nodeLayoutRevision = filters.map((filter) => filter.id).join('|')
+  const nodeLayoutRevision = displayedFilters.map((filter) => filter.id).join('|')
   const activeCount = filters.filter((filter) => filter.enabled).length
   const nyquist = sampleRate ? sampleRate / 2 : 24_000
   const maximumFrequency = Math.min(96_000, Math.max(20, nyquist))
@@ -166,7 +206,7 @@ export function FilterLab({
     : null
 
   const updateInspectorPosition = useCallback(() => {
-    if (!effectiveSelectedId) return
+    if (!effectiveSelectedId || draggingNodeId) return
     const grid = gridRef.current
     const graphPanel = graphPanelRef.current
     const node = nodeRefs.current.get(effectiveSelectedId)
@@ -193,7 +233,7 @@ export function FilterLab({
         ? position
         : { left, top }
     ))
-  }, [effectiveSelectedId])
+  }, [draggingNodeId, effectiveSelectedId])
 
   const updateOutputControlsPosition = useCallback(() => {
     if (!outputControlsOpen) return
@@ -255,6 +295,213 @@ export function FilterLab({
     ))
   }, [inputInfoOpen])
 
+  const applyNodeDragPreview = useCallback((clientX: number) => {
+    const runtime = nodeDragRuntimeRef.current
+    if (!runtime) return
+
+    const candidateIds = runtime.originalOrder.filter((id) => id !== runtime.draggedId)
+    let insertionIndex = candidateIds.length
+    for (let index = 0; index < candidateIds.length; index += 1) {
+      const candidateId = candidateIds[index]
+      const candidate = candidateId ? nodeRefs.current.get(candidateId) : null
+      if (!candidate) continue
+      const rect = candidate.getBoundingClientRect()
+      if (clientX < rect.left + rect.width / 2) {
+        insertionIndex = index
+        break
+      }
+    }
+
+    const nextOrder = reorderNodeIds(
+      runtime.originalOrder,
+      runtime.draggedId,
+      insertionIndex,
+    )
+    if (nodeOrdersEqual(runtime.previewOrder, nextOrder)) return
+    runtime.previewOrder = nextOrder
+    setDragPreviewOrder(nextOrder)
+  }, [])
+
+  const updateNodeDragGhostPosition = useCallback((
+    clientX: number,
+    clientY: number,
+    horizontalDelta = 0,
+  ) => {
+    const canvas = graphCanvasRef.current
+    const ghost = nodeDragGhostRef.current
+    if (!canvas || !ghost) return
+    const rect = canvas.getBoundingClientRect()
+    const ghostWidth = ghost.offsetWidth || 94
+    const ghostHeight = ghost.offsetHeight || 96
+    const position = calculateConstrainedDragGhostPosition(
+      { x: clientX - rect.left, y: clientY - rect.top },
+      {
+        width: rect.width,
+        height: rect.height,
+        scrollLeft: canvas.scrollLeft,
+        scrollTop: canvas.scrollTop,
+      },
+      { width: ghostWidth, height: ghostHeight },
+    )
+    ghost.style.transform = `translate3d(${position.x}px, ${position.y}px, 0)`
+    ghost.style.setProperty('--drag-tilt', `${clamp(horizontalDelta * 0.24, -4, 4)}deg`)
+  }, [])
+
+  const stopNodeDragAutoScroll = useCallback(() => {
+    if (nodeDragAutoScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(nodeDragAutoScrollFrameRef.current)
+      nodeDragAutoScrollFrameRef.current = null
+    }
+  }, [])
+
+  const startNodeDragAutoScroll = useCallback(() => {
+    stopNodeDragAutoScroll()
+    const tick = () => {
+      const runtime = nodeDragRuntimeRef.current
+      const canvas = graphCanvasRef.current
+      if (!runtime || !canvas) {
+        nodeDragAutoScrollFrameRef.current = null
+        return
+      }
+
+      const rect = canvas.getBoundingClientRect()
+      let scrollStep = 0
+      if (runtime.pointerX < rect.left + DRAG_AUTO_SCROLL_EDGE_PX) {
+        const intensity = clamp(
+          (rect.left + DRAG_AUTO_SCROLL_EDGE_PX - runtime.pointerX) / DRAG_AUTO_SCROLL_EDGE_PX,
+          0,
+          1,
+        )
+        scrollStep = -Math.max(2, intensity * DRAG_AUTO_SCROLL_MAX_STEP_PX)
+      } else if (runtime.pointerX > rect.right - DRAG_AUTO_SCROLL_EDGE_PX) {
+        const intensity = clamp(
+          (runtime.pointerX - (rect.right - DRAG_AUTO_SCROLL_EDGE_PX)) / DRAG_AUTO_SCROLL_EDGE_PX,
+          0,
+          1,
+        )
+        scrollStep = Math.max(2, intensity * DRAG_AUTO_SCROLL_MAX_STEP_PX)
+      }
+
+      if (scrollStep !== 0) {
+        const previousScrollLeft = canvas.scrollLeft
+        canvas.scrollLeft += scrollStep
+        if (canvas.scrollLeft !== previousScrollLeft) {
+          applyNodeDragPreview(runtime.pointerX)
+          updateNodeDragGhostPosition(runtime.pointerX, runtime.pointerY)
+        }
+      }
+      nodeDragAutoScrollFrameRef.current = window.requestAnimationFrame(tick)
+    }
+    nodeDragAutoScrollFrameRef.current = window.requestAnimationFrame(tick)
+  }, [applyNodeDragPreview, stopNodeDragAutoScroll, updateNodeDragGhostPosition])
+
+  const finishNodeDrag = useCallback((commit: boolean) => {
+    const runtime = nodeDragRuntimeRef.current
+    if (!runtime) return
+
+    stopNodeDragAutoScroll()
+    nodeDragRuntimeRef.current = null
+    try {
+      if (runtime.captureTarget.hasPointerCapture(runtime.pointerId)) {
+        runtime.captureTarget.releasePointerCapture(runtime.pointerId)
+      }
+    } catch {
+      // The capture target may already have been released by pointercancel.
+    }
+
+    setDraggingNodeId(null)
+    setDragPreviewOrder(null)
+    if (commit && !nodeOrdersEqual(runtime.originalOrder, runtime.previewOrder)) {
+      const filtersById = new Map(filters.map((filter) => [filter.id, filter]))
+      const nextFilters = runtime.previewOrder.flatMap((id) => {
+        const filter = filtersById.get(id)
+        return filter ? [filter] : []
+      })
+      if (nextFilters.length === filters.length) {
+        onFiltersChange(nextFilters)
+        const finalIndex = runtime.previewOrder.indexOf(runtime.draggedId)
+        const moved = filtersById.get(runtime.draggedId)
+        const label = moved ? FILTER_DEFINITIONS[moved.type].label : '节点'
+        setDragAnnouncement(`已将${label}移动到第 ${finalIndex + 1} 位，共 ${filters.length} 个节点`)
+      }
+    }
+
+    if (suppressedNodeClickTimerRef.current !== null) {
+      window.clearTimeout(suppressedNodeClickTimerRef.current)
+    }
+    suppressedNodeClickTimerRef.current = window.setTimeout(() => {
+      if (suppressedNodeClickRef.current === runtime.draggedId) {
+        suppressedNodeClickRef.current = null
+      }
+      suppressedNodeClickTimerRef.current = null
+    }, 0)
+  }, [filters, onFiltersChange, stopNodeDragAutoScroll])
+
+  const startNodeDrag = useCallback((
+    event: ReactPointerEvent<HTMLSpanElement>,
+    draggedId: string,
+  ) => {
+    const canvas = graphCanvasRef.current
+    if (!canvas || event.button !== 0 || filters.length < 2 || nodeDragRuntimeRef.current) return
+    event.preventDefault()
+    event.stopPropagation()
+
+    const originalOrder = filters.map((filter) => filter.id)
+    canvas.setPointerCapture(event.pointerId)
+    nodeDragRuntimeRef.current = {
+      draggedId,
+      pointerId: event.pointerId,
+      originalOrder,
+      previewOrder: [...originalOrder],
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      captureTarget: canvas,
+    }
+    suppressedNodeClickRef.current = draggedId
+    setSelectedId(null)
+    setInputInfoOpen(false)
+    setOutputControlsOpen(false)
+    setDraggingNodeId(draggedId)
+    setDragPreviewOrder(originalOrder)
+    setDragAnnouncement('')
+    startNodeDragAutoScroll()
+  }, [filters, startNodeDragAutoScroll])
+
+  const moveNodeDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const runtime = nodeDragRuntimeRef.current
+    if (!runtime || runtime.pointerId !== event.pointerId) return
+    event.preventDefault()
+    const horizontalDelta = event.clientX - runtime.pointerX
+    runtime.pointerX = event.clientX
+    runtime.pointerY = event.clientY
+    updateNodeDragGhostPosition(event.clientX, event.clientY, horizontalDelta)
+    applyNodeDragPreview(event.clientX)
+  }, [applyNodeDragPreview, updateNodeDragGhostPosition])
+
+  const dropNodeDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const runtime = nodeDragRuntimeRef.current
+    if (!runtime || runtime.pointerId !== event.pointerId) return
+    event.preventDefault()
+    runtime.pointerX = event.clientX
+    runtime.pointerY = event.clientY
+    updateNodeDragGhostPosition(event.clientX, event.clientY)
+    applyNodeDragPreview(event.clientX)
+    finishNodeDrag(true)
+  }, [applyNodeDragPreview, finishNodeDrag, updateNodeDragGhostPosition])
+
+  const cancelNodeDrag = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const runtime = nodeDragRuntimeRef.current
+    if (!runtime || runtime.pointerId !== event.pointerId) return
+    finishNodeDrag(false)
+  }, [finishNodeDrag])
+
+  useLayoutEffect(() => {
+    const runtime = nodeDragRuntimeRef.current
+    if (draggingNodeId && runtime) {
+      updateNodeDragGhostPosition(runtime.pointerX, runtime.pointerY)
+    }
+  }, [draggingNodeId, updateNodeDragGhostPosition])
+
   useLayoutEffect(() => {
     updateInspectorPosition()
     const frame = window.requestAnimationFrame(updateInspectorPosition)
@@ -289,9 +536,13 @@ export function FilterLab({
   }, [updateInputInfoPosition])
 
   useEffect(() => {
-    if (!selected && !inputInfoOpen && !outputControlsOpen) return
+    if (!selected && !inputInfoOpen && !outputControlsOpen && !draggingNodeId) return
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (nodeDragRuntimeRef.current) {
+          event.preventDefault()
+          finishNodeDrag(false)
+        }
         setSelectedId(null)
         setInputInfoOpen(false)
         setOutputControlsOpen(false)
@@ -299,7 +550,22 @@ export function FilterLab({
     }
     window.addEventListener('keydown', closeOnEscape)
     return () => window.removeEventListener('keydown', closeOnEscape)
-  }, [inputInfoOpen, outputControlsOpen, selected])
+  }, [draggingNodeId, finishNodeDrag, inputInfoOpen, outputControlsOpen, selected])
+
+  useEffect(() => {
+    const runtime = nodeDragRuntimeRef.current
+    if (runtime && !nodeOrdersEqual(runtime.originalOrder, filters.map((filter) => filter.id))) {
+      finishNodeDrag(false)
+    }
+  }, [filters, finishNodeDrag])
+
+  useEffect(() => () => {
+    stopNodeDragAutoScroll()
+    nodeDragRuntimeRef.current = null
+    if (suppressedNodeClickTimerRef.current !== null) {
+      window.clearTimeout(suppressedNodeClickTimerRef.current)
+    }
+  }, [stopNodeDragAutoScroll])
 
   const addFilter = (type: FilterKind) => {
     if (filters.length >= MAX_FILTER_NODES) return
@@ -406,8 +672,16 @@ export function FilterLab({
           </div>
 
           <div
-            className="filter-graph-canvas"
+            ref={graphCanvasRef}
+            className={`filter-graph-canvas ${draggingNodeId ? 'dragging' : ''}`}
             aria-label="串行滤波节点图"
+            onPointerMove={moveNodeDrag}
+            onPointerUp={dropNodeDrag}
+            onPointerCancel={cancelNodeDrag}
+            onLostPointerCapture={(event) => {
+              const runtime = nodeDragRuntimeRef.current
+              if (runtime?.pointerId === event.pointerId) finishNodeDrag(false)
+            }}
             onScroll={() => {
               updateInspectorPosition()
               updateInputInfoPosition()
@@ -439,21 +713,25 @@ export function FilterLab({
               <small>原始 PCM</small>
             </button>
             <span className="signal-connector"><Cable size={15} /></span>
-            {filters.map((filter, index) => {
+            {displayedFilters.map((filter, index) => {
               const definition = FILTER_DEFINITIONS[filter.type]
               return (
-                <div className="filter-node-wrap" key={filter.id}>
+                <div className={`filter-node-wrap ${draggingNodeId === filter.id ? 'dragging' : ''}`} key={filter.id}>
                   <button
                     ref={(node) => {
                       if (node) nodeRefs.current.set(filter.id, node)
                       else nodeRefs.current.delete(filter.id)
                     }}
                     type="button"
-                    className={`filter-node ${effectiveSelectedId === filter.id ? 'selected' : ''} ${filter.enabled ? '' : 'bypassed'}`}
+                    className={`filter-node ${effectiveSelectedId === filter.id ? 'selected' : ''} ${filter.enabled ? '' : 'bypassed'} ${draggingNodeId === filter.id ? 'dragging' : ''}`}
                     aria-pressed={effectiveSelectedId === filter.id}
-                    aria-expanded={effectiveSelectedId === filter.id}
-                    aria-controls={effectiveSelectedId === filter.id ? 'floating-node-inspector' : undefined}
+                    aria-expanded={effectiveSelectedId === filter.id && !draggingNodeId}
+                    aria-controls={effectiveSelectedId === filter.id && !draggingNodeId ? 'floating-node-inspector' : undefined}
                     onClick={() => {
+                      if (suppressedNodeClickRef.current === filter.id) {
+                        suppressedNodeClickRef.current = null
+                        return
+                      }
                       setInputInfoOpen(false)
                       setOutputControlsOpen(false)
                       setSelectedId(filter.id)
@@ -463,6 +741,20 @@ export function FilterLab({
                     <span className="filter-node-type">{definition.label}</span>
                     <strong>{formatFrequency(filter.type === 'resampler' ? filter.targetSampleRateHz : filter.frequencyHz)}</strong>
                     <small>{filter.enabled ? 'ACTIVE' : 'BYPASS'}</small>
+                    {displayedFilters.length > 1 && (
+                      <span
+                        className="filter-node-drag-handle"
+                        aria-hidden="true"
+                        title="拖动调整节点顺序"
+                        onPointerDown={(event) => startNodeDrag(event, filter.id)}
+                        onClick={(event) => {
+                          event.preventDefault()
+                          event.stopPropagation()
+                        }}
+                      >
+                        <GripVertical size={13} />
+                      </span>
+                    )}
                   </button>
                   <span className="signal-connector"><Cable size={15} /></span>
                 </div>
@@ -496,6 +788,17 @@ export function FilterLab({
                 <span>节点会自动串联，并可在播放过程中重新编译。</span>
               </div>
             )}
+            {draggedFilter && (
+              <div ref={nodeDragGhostRef} className="filter-node-drag-ghost" aria-hidden="true">
+                <div className={`filter-node filter-node-drag-ghost-card ${draggedFilter.enabled ? '' : 'bypassed'}`}>
+                  <span className="filter-node-index">{String(displayedFilters.findIndex((filter) => filter.id === draggedFilter.id) + 1).padStart(2, '0')}</span>
+                  <span className="filter-node-type">{FILTER_DEFINITIONS[draggedFilter.type].label}</span>
+                  <strong>{formatFrequency(draggedFilter.type === 'resampler' ? draggedFilter.targetSampleRateHz : draggedFilter.frequencyHz)}</strong>
+                  <small>{draggedFilter.enabled ? 'ACTIVE' : 'BYPASS'}</small>
+                </div>
+              </div>
+            )}
+            <span className="visually-hidden" aria-live="polite">{dragAnnouncement}</span>
           </div>
 
           <FilterTrackPreview
@@ -517,7 +820,7 @@ export function FilterLab({
           role="dialog"
           aria-modal="false"
           aria-label="节点参数悬浮面板"
-          className={`filter-inspector floating panel-surface ${selected ? 'open' : ''}`}
+          className={`filter-inspector floating panel-surface ${selected && !draggingNodeId ? 'open' : ''}`}
           style={{ left: inspectorPosition.left, top: inspectorPosition.top }}
           onKeyDown={(event) => {
             if (event.key === 'Escape') setSelectedId(null)
