@@ -20,6 +20,11 @@ import {
 } from 'lucide-react'
 import { AudioEngine } from './audio/AudioEngine'
 import {
+  validateFilterChain,
+  type FilterAuditionMode,
+  type FilterNodeConfig,
+} from './audio/filterGraph'
+import {
   defaultChannelLayout,
   describeChannelLayout,
   normalizeChannelLayout,
@@ -41,7 +46,7 @@ import {
   createProjectStore,
   type StoredRecentWorkspace,
 } from './state/projectStore'
-import { AppHeader } from './components/AppHeader'
+import { AppHeader, type AppPage } from './components/AppHeader'
 import { AssetSidebar, type AssetSummary } from './components/AssetSidebar'
 import { AnalysisControls } from './components/AnalysisControls'
 import { ChannelPanel } from './components/ChannelPanel'
@@ -50,6 +55,7 @@ import {
   ExportDialog,
   type WavExportRequest,
 } from './components/ExportDialog'
+import { FilterLab } from './components/FilterLab'
 import type { Fft3DMode, Fft3DQuality } from './components/Fft3DView'
 import { SpectrogramCanvas } from './components/SpectrogramCanvas'
 import { SpectrumCanvas } from './components/SpectrumCanvas'
@@ -260,6 +266,8 @@ export function App() {
   const projectStoreCloseTimerRef = useRef<number | null>(null)
   const waveformControlsRef = useRef<{ fit: () => void; zoomToSelection: () => void } | null>(null)
   const reset3dRef = useRef<(() => void) | null>(null)
+  const filterChainRef = useRef<readonly FilterNodeConfig[]>([])
+  const filterAuditionRef = useRef<FilterAuditionMode>('original')
   const dragDepthRef = useRef(0)
   const [projectStore] = useState(() => createProjectStore())
   const [workspaceRestored, setWorkspaceRestored] = useState(false)
@@ -268,6 +276,9 @@ export function App() {
   const [activeId, setActiveId] = useState<string | null>(null)
   const [playback, setPlayback] = useState<PlaybackSnapshot>(EMPTY_PLAYBACK)
   const [config, setConfig] = useState<WorkspaceAnalysisConfig>(DEFAULT_ANALYSIS_CONFIG)
+  const [appPage, setAppPage] = useState<AppPage>('analysis')
+  const [filterChain, setFilterChain] = useState<readonly FilterNodeConfig[]>([])
+  const [filterAuditionMode, setFilterAuditionMode] = useState<FilterAuditionMode>('original')
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('spectrum')
   const [mode3d, setMode3d] = useState<Fft3DMode>('surface')
   const [quality3d, setQuality3d] = useState<Fft3DQuality>('medium')
@@ -295,6 +306,8 @@ export function App() {
   const ensureEngine = useCallback((): AudioEngine => {
     if (!engineRef.current) {
       const engine = new AudioEngine()
+      engine.setFilterChain(filterChainRef.current)
+      engine.setFilterAudition(filterAuditionRef.current)
       engineRef.current = engine
       unsubscribeEngineRef.current = engine.subscribe(setPlayback)
       setPlayback(engine.snapshot())
@@ -314,6 +327,33 @@ export function App() {
   const ensureExportClient = useCallback((): ExportWorkerClient => {
     exportClientRef.current ??= new ExportWorkerClient()
     return exportClientRef.current
+  }, [])
+
+  const handleFilterChainChange = useCallback((nextFilters: readonly FilterNodeConfig[]) => {
+    try {
+      validateFilterChain(nextFilters)
+      const copied = nextFilters.map((filter) => ({ ...filter }))
+      engineRef.current?.setFilterChain(copied)
+      filterChainRef.current = copied
+      setFilterChain(copied)
+      if (copied.length === 0 && filterAuditionRef.current === 'filtered') {
+        engineRef.current?.setFilterAudition('original')
+        filterAuditionRef.current = 'original'
+        setFilterAuditionMode('original')
+      }
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '滤波器链编译失败')
+    }
+  }, [])
+
+  const handleFilterAuditionChange = useCallback((mode: FilterAuditionMode) => {
+    try {
+      engineRef.current?.setFilterAudition(mode)
+      filterAuditionRef.current = mode
+      setFilterAuditionMode(mode)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '无法切换试听模式')
+    }
   }, [])
 
   const loadRecentWorkspace = useCallback((): Promise<StoredRecentWorkspace | null> => {
@@ -1231,13 +1271,15 @@ export function App() {
       <AppHeader
         hasAudio={Boolean(activeAsset)}
         busy={busy}
+        activePage={appPage}
         onImport={() => fileInputRef.current?.click()}
+        onPageChange={setAppPage}
         onExportWav={() => setExportDialogOpen(true)}
         onExportCsv={() => void handleCsvExport()}
         onExportJson={handleJsonExport}
       />
 
-      <main className="app-main">
+      {appPage === 'analysis' ? <main className="app-main">
         <AssetSidebar
           assets={assetSummaries}
           onImport={() => fileInputRef.current?.click()}
@@ -1368,7 +1410,17 @@ export function App() {
           onQuality3dChange={setQuality3d}
           onReset3d={() => reset3dRef.current?.()}
         />
-      </main>
+      </main> : (
+        <FilterLab
+          filters={filterChain}
+          auditionMode={filterAuditionMode}
+          hasAudio={Boolean(activeAsset)}
+          playing={playback.kind === 'playing'}
+          sampleRate={activeAsset?.buffer.sampleRate ?? null}
+          onFiltersChange={handleFilterChainChange}
+          onAuditionModeChange={handleFilterAuditionChange}
+        />
+      )}
 
       <Transport
         hasAudio={Boolean(activeAsset)}

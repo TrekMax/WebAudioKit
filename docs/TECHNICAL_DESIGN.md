@@ -328,9 +328,9 @@ idle
 ### 7.1 音频图
 
 ```text
-                                      ┌─> Channel Gain 0 ─┐
-AudioBufferSourceNode ─> Splitter ────┼─> Channel Gain … ─┼─> Merger ─> Master Gain ─> destination
-                                      └─> Channel Gain N ─┘
+                                      ┌─> Channel Gain 0 ─┐              ┌─> Dry Gain ───────────────┐
+AudioBufferSourceNode ─> Splitter ────┼─> Channel Gain … ─┼─> Merger ───┤                              ├─> Master Gain ─> destination
+                                      └─> Channel Gain N ─┘              └─> Biquad chain ─> Wet Gain ┘
 ```
 
 `AudioBufferSourceNode` 是一次性节点。每次播放、跳转或倍速变更均创建新 source；停止后立即断开旧节点。Splitter/Gain/Merger 路由随活动资源创建并在卸载时成对断开，source 仅接入该稳定路由。Master Gain 继续承载全局音量与静音。
@@ -338,6 +338,8 @@ AudioBufferSourceNode ─> Splitter ────┼─> Channel Gain … ─┼�
 每声道增益的可听规则为 `!muted[c] && (!anySolo || solo[c])`，因此 Mute 优先于 Solo。增益变化使用短线性斜坡。路由保持源索引的身份顺序；5.1 标签顺序为 `FL, FR, FC, LFE, BL, BR`，7.1 作为显式扩展追加 `SL, SR`。语义布局是项目元数据和 UI 标识，不承诺浏览器、操作系统或物理设备提供相同数量的扬声器，也不执行任意硬件端口映射。
 
 播放图不依赖 `AnalyserNode` 生成权威 FFT，以保证实时与离线频谱使用相同窗函数和幅度标定。Mute/Solo 不回写源 PCM，也不进入分析或导出管线。
+
+滤波选项页可在 Merger 后编译一条有序 BiquadFilter 串行链。干声与湿声分支同时连接到 Master Gain，A/B 试听仅对两条分支的 GainNode 做短斜坡切换，不重建 AudioBufferSourceNode。节点增删、排序、类型或参数变化时在主线程控制路径创建新链，切换连接后断开并释放旧节点；该过程不在 AudioWorklet 或音频渲染回调内执行。滤波链只属于监听图，不进入原始 PCM、权威 FFT/STFT、峰值和导出管线。
 
 ### 7.2 播放状态
 
@@ -935,6 +937,14 @@ Web Audio 集成可用 `OfflineAudioContext` 验证音频图；状态机单测�
 - **决定**：IndexedDB 中的峰值和声谱始终视为可丢弃派生物。
 - **原因**：浏览器可能清理存储，schema/算法也会演进。
 - **代价**：缓存丢失后需要重新分析；UI 必须表达重建进度。
+
+### ADR-011：基础滤波使用非破坏式监听分支
+
+- **状态**：Accepted
+- **记录**：[`docs/adr/011-non-destructive-filter-audition.md`](adr/011-non-destructive-filter-audition.md)
+- **决定**：在多声道合并后编译串行 BiquadFilter 链，以干/湿双分支提供原音与滤波结果 A/B 试听。
+- **原因**：允许快速比较不同滤波设置，同时保持源 PCM、分析与导出语义不变。
+- **代价**：首版只提供串行基础滤波，不提供任意图拓扑、离线处理或效果后分析。
 
 ## 24. 实施顺序与技术验收门
 

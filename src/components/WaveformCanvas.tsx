@@ -88,7 +88,7 @@ function drawTimeAxis(
   const firstTick = Math.ceil(startSeconds / step) * step
   context.fillStyle = '#5f6e80'
   context.strokeStyle = '#273544'
-  context.font = '8px DM Mono, monospace'
+  context.font = '11px DM Mono, monospace'
   context.textAlign = 'center'
   for (let time = firstTick; time <= endSeconds + step * 0.01; time += step) {
     const x = LEFT_GUTTER + ((time - startSeconds) / (endSeconds - startSeconds)) * plotWidth
@@ -202,7 +202,7 @@ export function WaveformCanvas({
       context.lineTo(LEFT_GUTTER + plotWidth, center + 0.5)
       context.stroke()
       context.fillStyle = '#566576'
-      context.font = '8px DM Mono, monospace'
+      context.font = '11px DM Mono, monospace'
       context.textAlign = 'center'
       const label = buffer?.numberOfChannels === 1 ? 'MONO' : `CH ${channelIndex + 1}`
       context.fillText(label, LEFT_GUTTER / 2, center + 3)
@@ -210,7 +210,7 @@ export function WaveformCanvas({
 
     if (buffer && channelIndexes.length === 0) {
       context.fillStyle = '#657386'
-      context.font = '10px Inter, sans-serif'
+      context.font = '13px Inter, sans-serif'
       context.textAlign = 'center'
       context.fillText('请选择要显示的声道', LEFT_GUTTER + plotWidth / 2, plotHeight / 2)
     } else if (buffer && peaks && peaks.levels.length > 0) {
@@ -249,12 +249,12 @@ export function WaveformCanvas({
       }
     } else if (buffer) {
       context.fillStyle = '#657386'
-      context.font = '10px Inter, sans-serif'
+      context.font = '13px Inter, sans-serif'
       context.textAlign = 'center'
       context.fillText('正在构建多分辨率波形…', LEFT_GUTTER + plotWidth / 2, plotHeight / 2)
     } else {
       context.fillStyle = '#657386'
-      context.font = '10px Inter, sans-serif'
+      context.font = '13px Inter, sans-serif'
       context.textAlign = 'center'
       context.fillText('导入音频后显示波形', LEFT_GUTTER + plotWidth / 2, plotHeight / 2)
     }

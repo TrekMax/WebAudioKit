@@ -1,9 +1,22 @@
-import { AudioLines, ChevronDown, Download, FileAudio, ShieldCheck, Upload } from 'lucide-react'
+import {
+  AudioLines,
+  ChevronDown,
+  Download,
+  FileAudio,
+  ShieldCheck,
+  SlidersHorizontal,
+  Upload,
+  Waves,
+} from 'lucide-react'
+
+export type AppPage = 'analysis' | 'filters'
 
 interface AppHeaderProps {
   hasAudio: boolean
   busy: boolean
+  activePage: AppPage
   onImport: () => void
+  onPageChange: (page: AppPage) => void
   onExportWav: () => void
   onExportCsv: () => void
   onExportJson: () => void
@@ -12,7 +25,9 @@ interface AppHeaderProps {
 export function AppHeader({
   hasAudio,
   busy,
+  activePage,
   onImport,
+  onPageChange,
   onExportWav,
   onExportCsv,
   onExportJson,
@@ -24,8 +39,14 @@ export function AppHeader({
         <div><strong>WebAudioKit</strong><span>ANALYSIS WORKSTATION</span></div>
       </div>
       <div className="header-center">
-        <span className="local-badge"><ShieldCheck size={13} /> 本地处理</span>
-        <span className="header-status"><span className={busy ? 'status-dot busy' : 'status-dot'} /> {busy ? '正在计算' : '系统就绪'}</span>
+        <nav className="workspace-navigation" aria-label="工作页面">
+          <button type="button" className={activePage === 'analysis' ? 'active' : ''} aria-current={activePage === 'analysis' ? 'page' : undefined} onClick={() => onPageChange('analysis')}><Waves size={13} /> 分析工作台</button>
+          <button type="button" className={activePage === 'filters' ? 'active' : ''} aria-current={activePage === 'filters' ? 'page' : undefined} onClick={() => onPageChange('filters')}><SlidersHorizontal size={13} /> 滤波选项</button>
+        </nav>
+        <span className="header-runtime-status">
+          <span className="local-badge"><ShieldCheck size={13} /> 本地处理</span>
+          <span className="header-status"><span className={busy ? 'status-dot busy' : 'status-dot'} /> {busy ? '正在计算' : '系统就绪'}</span>
+        </span>
       </div>
       <div className="header-actions">
         <button className="secondary-button" onClick={onImport}><Upload size={15} /> 导入音频</button>

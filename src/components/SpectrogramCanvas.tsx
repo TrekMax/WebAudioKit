@@ -117,7 +117,7 @@ export function SpectrogramCanvas({
       context.stroke()
     } else {
       context.fillStyle = '#6f7d91'
-      context.font = '12px Inter, system-ui, sans-serif'
+      context.font = '15px Inter, system-ui, sans-serif'
       context.textAlign = 'center'
       context.fillText(
         '完成 FFT 分析后显示时间—频率能量分布',
@@ -128,7 +128,7 @@ export function SpectrogramCanvas({
 
     context.strokeStyle = 'rgba(145, 165, 190, 0.22)'
     context.fillStyle = '#8290a3'
-    context.font = '10px Inter, system-ui, sans-serif'
+    context.font = '13px Inter, system-ui, sans-serif'
     context.lineWidth = 1
     const maxFrequency = result?.frequenciesHz.at(-1) ?? 24_000
     const minimumFrequency = frequencyScale === 'log' && maxFrequency > 20 ? 20 : 0

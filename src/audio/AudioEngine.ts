@@ -13,6 +13,13 @@ import {
   type SampleIndex,
   type SampleRange,
 } from './types'
+import {
+  applyFilterNodeConfig,
+  compileFilterChain,
+  validateFilterChain,
+  type FilterAuditionMode,
+  type FilterNodeConfig,
+} from './filterGraph'
 
 const MIN_PLAYBACK_RATE = 0.5
 const MAX_PLAYBACK_RATE = 2
@@ -31,6 +38,12 @@ interface ChannelRouting {
   readonly splitter: ChannelSplitterNode
   readonly gains: GainNode[]
   readonly merger: ChannelMergerNode
+}
+
+interface FilterRouting {
+  readonly dryGain: GainNode
+  readonly filteredGain: GainNode
+  readonly filters: readonly BiquadFilterNode[]
 }
 
 type StateBeforeLock = 'ready' | 'paused' | 'ended'
@@ -53,6 +66,9 @@ export class AudioEngine {
   private channelGainNodes: GainNode[] = []
   private channelMuted: boolean[] = []
   private channelSolo: boolean[] = []
+  private filterRouting: FilterRouting | null = null
+  private filterChain: FilterNodeConfig[] = []
+  private filterAudition: FilterAuditionMode = 'original'
   private assetId: AssetId | null = null
   private kind: PlaybackKind = 'empty'
   private positionSample: SampleIndex = 0
@@ -496,6 +512,65 @@ export class AudioEngine {
     return this.setPlaybackRate(rate)
   }
 
+  setFilterChain(filters: readonly FilterNodeConfig[]): void {
+    this.assertNotDisposed()
+    validateFilterChain(filters)
+
+    if (filters.length === 0) {
+      const merger = this.mergerNode
+      if (merger) tryDisconnect(merger)
+      this.releaseFilterRouting()
+      if (merger) merger.connect(this.gainNode)
+      this.filterChain = []
+      return
+    }
+
+    const currentActiveFilters = this.filterChain.filter((filter) => filter.enabled)
+    const nextActiveFilters = filters.filter((filter) => filter.enabled)
+    if (
+      this.filterRouting
+      && currentActiveFilters.length === nextActiveFilters.length
+      && currentActiveFilters.every((filter, index) => (
+        filter.id === nextActiveFilters[index]?.id
+        && filter.type === nextActiveFilters[index]?.type
+      ))
+    ) {
+      nextActiveFilters.forEach((filter, index) => {
+        const node = this.filterRouting?.filters[index]
+        if (node) applyFilterNodeConfig(node, filter, this.context.currentTime)
+      })
+      this.filterChain = filters.map((filter) => ({ ...filter }))
+      return
+    }
+
+    const nextRouting = this.createFilterRouting(filters)
+    const merger = this.mergerNode
+    if (merger) {
+      tryDisconnect(merger)
+      this.connectMergerOutput(merger, nextRouting)
+    }
+    this.releaseFilterRouting()
+    this.filterRouting = nextRouting
+    this.filterChain = filters.map((filter) => ({ ...filter }))
+  }
+
+  getFilterChain(): readonly FilterNodeConfig[] {
+    return this.filterChain.map((filter) => ({ ...filter }))
+  }
+
+  setFilterAudition(mode: FilterAuditionMode): void {
+    this.assertNotDisposed()
+    if (mode !== 'original' && mode !== 'filtered') {
+      throw new RangeError(`Unsupported filter audition mode: ${String(mode)}`)
+    }
+    this.filterAudition = mode
+    this.applyFilterAudition()
+  }
+
+  getFilterAudition(): FilterAuditionMode {
+    return this.filterAudition
+  }
+
   snapshot(): PlaybackSnapshot {
     const positionSample = this.getCurrentPositionSample()
     const sampleRate = this.buffer?.sampleRate ?? null
@@ -539,6 +614,7 @@ export class AudioEngine {
     }
 
     this.unload()
+    this.releaseFilterRouting()
     this.disposed = true
     this.listeners.clear()
     this.context.removeEventListener('statechange', this.handleContextStateChange)
@@ -719,7 +795,7 @@ export class AudioEngine {
         splitter.connect(gain, channelIndex, 0)
         gain.connect(merger, 0, channelIndex)
       }
-      merger.connect(this.gainNode)
+      this.connectMergerOutput(merger, this.filterRouting)
 
       return { splitter, gains, merger }
     } catch (error) {
@@ -756,6 +832,58 @@ export class AudioEngine {
     if (merger) {
       tryDisconnect(merger)
     }
+  }
+
+  private createFilterRouting(filters: readonly FilterNodeConfig[]): FilterRouting {
+    const compiled = compileFilterChain(this.context, filters)
+    let dryGain: GainNode | null = null
+    let filteredGain: GainNode | null = null
+
+    try {
+      dryGain = this.context.createGain()
+      filteredGain = this.context.createGain()
+      const originalActive = this.filterAudition === 'original'
+      dryGain.gain.setValueAtTime(originalActive ? 1 : 0, this.context.currentTime)
+      filteredGain.gain.setValueAtTime(originalActive ? 0 : 1, this.context.currentTime)
+      dryGain.connect(this.gainNode)
+      filteredGain.connect(this.gainNode)
+      for (let index = 0; index < compiled.length - 1; index += 1) {
+        compiled[index]?.connect(compiled[index + 1]!)
+      }
+      compiled.at(-1)?.connect(filteredGain)
+      return { dryGain, filteredGain, filters: compiled }
+    } catch (error) {
+      for (const node of compiled) tryDisconnect(node)
+      if (dryGain) tryDisconnect(dryGain)
+      if (filteredGain) tryDisconnect(filteredGain)
+      throw error
+    }
+  }
+
+  private connectMergerOutput(merger: ChannelMergerNode, routing: FilterRouting | null): void {
+    if (!routing) {
+      merger.connect(this.gainNode)
+      return
+    }
+    merger.connect(routing.dryGain)
+    merger.connect(routing.filters[0] ?? routing.filteredGain)
+  }
+
+  private applyFilterAudition(): void {
+    const routing = this.filterRouting
+    if (!routing) return
+    const originalActive = this.filterAudition === 'original'
+    this.rampGain(routing.dryGain.gain, originalActive ? 1 : 0)
+    this.rampGain(routing.filteredGain.gain, originalActive ? 0 : 1)
+  }
+
+  private releaseFilterRouting(): void {
+    const routing = this.filterRouting
+    this.filterRouting = null
+    if (!routing) return
+    for (const filter of routing.filters) tryDisconnect(filter)
+    tryDisconnect(routing.dryGain)
+    tryDisconnect(routing.filteredGain)
   }
 
   private assertChannelIndex(channelIndex: number): void {

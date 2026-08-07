@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { AudioEngine } from './AudioEngine'
+import { createFilterNodeConfig } from './filterGraph'
 
 class FakeAudioParam {
   value = 1
@@ -89,6 +90,24 @@ class FakeChannelMergerNode {
   }
 }
 
+class FakeBiquadFilterNode {
+  type: BiquadFilterType = 'lowpass'
+  readonly frequency = new FakeAudioParam()
+  readonly Q = new FakeAudioParam()
+  readonly gain = new FakeAudioParam()
+  readonly connections: FakeConnection[] = []
+  disconnected = false
+
+  connect(destination: unknown, output = 0, input = 0): FakeBiquadFilterNode {
+    this.connections.push({ destination, output, input })
+    return this
+  }
+
+  disconnect(): void {
+    this.disconnected = true
+  }
+}
+
 class FakeBufferSourceNode {
   buffer: AudioBuffer | null = null
   readonly playbackRate = new FakeAudioParam()
@@ -129,6 +148,7 @@ class FakeAudioContext {
   readonly gains: FakeGainNode[] = []
   readonly splitters: FakeChannelSplitterNode[] = []
   readonly mergers: FakeChannelMergerNode[] = []
+  readonly filters: FakeBiquadFilterNode[] = []
   readonly sources: FakeBufferSourceNode[] = []
   resumeError: Error | null = null
   closed = false
@@ -162,6 +182,12 @@ class FakeAudioContext {
     const merger = new FakeChannelMergerNode(numberOfInputs)
     this.mergers.push(merger)
     return merger as unknown as ChannelMergerNode
+  }
+
+  createBiquadFilter(): BiquadFilterNode {
+    const filter = new FakeBiquadFilterNode()
+    this.filters.push(filter)
+    return filter as unknown as BiquadFilterNode
   }
 
   createBufferSource(): AudioBufferSourceNode {
@@ -364,6 +390,75 @@ describe('AudioEngine', () => {
     expect(channelGains[1]?.gain.calls).toContainEqual({ type: 'hold', time: 0.25 })
     expect(channelGains[0]?.gain.calls).toContainEqual({ type: 'ramp', value: 1, time: 0.27 })
     expect(channelGains[1]?.gain.calls).toContainEqual({ type: 'ramp', value: 0, time: 0.27 })
+  })
+
+  it('compiles a serial filter chain and switches dry/filtered audition without restarting', async () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+    engine.load(createAudioBuffer())
+    await engine.play()
+    const source = context.sources[0]
+    const merger = context.mergers[0]
+
+    engine.setFilterChain([
+      { ...createFilterNodeConfig('highpass', 'cut-rumble'), frequencyHz: 90 },
+      { ...createFilterNodeConfig('notch', 'bypass-hum'), enabled: false },
+      { ...createFilterNodeConfig('peaking', 'presence'), frequencyHz: 3_200, gainDb: 4 },
+    ])
+
+    const dryGain = context.gains.at(-2)
+    const filteredGain = context.gains.at(-1)
+    expect(context.filters).toHaveLength(2)
+    expect(context.filters.map((filter) => filter.type)).toEqual(['highpass', 'peaking'])
+    expect(context.filters[0]?.connections[0]?.destination).toBe(context.filters[1])
+    expect(context.filters[1]?.connections[0]?.destination).toBe(filteredGain)
+    expect(merger?.connections.slice(-2).map(({ destination }) => destination)).toEqual([
+      dryGain,
+      context.filters[0],
+    ])
+    expect([dryGain?.gain.value, filteredGain?.gain.value]).toEqual([1, 0])
+
+    engine.setFilterAudition('filtered')
+
+    expect([dryGain?.gain.value, filteredGain?.gain.value]).toEqual([0, 1])
+    expect(context.sources).toHaveLength(1)
+    expect(source).toMatchObject({ stopped: false, disconnected: false })
+    expect(engine.getFilterAudition()).toBe('filtered')
+  })
+
+  it('releases replaced filter nodes and keeps exposed configuration immutable', () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+    const first = createFilterNodeConfig('lowpass', 'tone')
+
+    engine.setFilterChain([first])
+    engine.load(createAudioBuffer())
+    const exposed = engine.getFilterChain()
+    const exposedNode = exposed[0] as unknown as { frequencyHz: number }
+    exposedNode.frequencyHz = 10
+    expect(engine.getFilterChain()[0]?.frequencyHz).toBe(first.frequencyHz)
+
+    const oldFilter = context.filters[0]
+    const oldDry = context.gains[1]
+    const oldFiltered = context.gains[2]
+    engine.setFilterChain([{ ...first, frequencyHz: 2_500 }])
+
+    expect(context.filters).toHaveLength(1)
+    expect(oldFilter?.frequency.value).toBe(2_500)
+    expect(oldFilter?.disconnected).toBe(false)
+
+    engine.setFilterChain([
+      { ...createFilterNodeConfig('highpass', first.id), frequencyHz: 2_500 },
+    ])
+
+    expect(oldFilter?.disconnected).toBe(true)
+    expect(oldDry?.disconnected).toBe(true)
+    expect(oldFiltered?.disconnected).toBe(true)
+    expect(engine.getFilterChain()[0]?.frequencyHz).toBe(2_500)
+
+    engine.setFilterChain([])
+    expect(engine.getFilterChain()).toEqual([])
+    expect(context.mergers[0]?.connections.at(-1)?.destination).toBe(context.gain)
   })
 
   it('returns channel state copies that cannot mutate engine state', () => {

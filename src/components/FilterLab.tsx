@@ -1,0 +1,294 @@
+import { useMemo, useState } from 'react'
+import {
+  ArrowLeft,
+  ArrowRight,
+  AudioWaveform,
+  Cable,
+  CheckCircle2,
+  Power,
+  RotateCcw,
+  SlidersHorizontal,
+  Trash2,
+  Volume2,
+  Waves,
+} from 'lucide-react'
+
+import {
+  FILTER_DEFINITIONS,
+  MAX_FILTER_NODES,
+  createFilterNodeConfig,
+  type FilterAuditionMode,
+  type FilterKind,
+  type FilterNodeConfig,
+} from '../audio/filterGraph'
+
+interface FilterLabProps {
+  readonly filters: readonly FilterNodeConfig[]
+  readonly auditionMode: FilterAuditionMode
+  readonly hasAudio: boolean
+  readonly playing: boolean
+  readonly sampleRate: number | null
+  readonly onFiltersChange: (filters: readonly FilterNodeConfig[]) => void
+  readonly onAuditionModeChange: (mode: FilterAuditionMode) => void
+}
+
+const FILTER_TYPES = Object.keys(FILTER_DEFINITIONS) as FilterKind[]
+
+function createFilterId(): string {
+  return `filter-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
+function formatFrequency(value: number): string {
+  return value >= 1_000
+    ? `${Number((value / 1_000).toFixed(2))} kHz`
+    : `${Math.round(value)} Hz`
+}
+
+export function FilterLab({
+  filters,
+  auditionMode,
+  hasAudio,
+  playing,
+  sampleRate,
+  onFiltersChange,
+  onAuditionModeChange,
+}: FilterLabProps) {
+  const [selectedId, setSelectedId] = useState<string | null>(filters[0]?.id ?? null)
+  const effectiveSelectedId = selectedId && filters.some((filter) => filter.id === selectedId)
+    ? selectedId
+    : (filters[0]?.id ?? null)
+  const selected = useMemo(
+    () => filters.find((filter) => filter.id === effectiveSelectedId) ?? null,
+    [effectiveSelectedId, filters],
+  )
+  const activeCount = filters.filter((filter) => filter.enabled).length
+  const nyquist = sampleRate ? sampleRate / 2 : 24_000
+  const maximumFrequency = Math.min(96_000, Math.max(20, nyquist))
+
+  const addFilter = (type: FilterKind) => {
+    if (filters.length >= MAX_FILTER_NODES) return
+    const id = createFilterId()
+    const created = createFilterNodeConfig(type, id)
+    onFiltersChange([
+      ...filters,
+      { ...created, frequencyHz: Math.min(created.frequencyHz, maximumFrequency) },
+    ])
+    setSelectedId(id)
+  }
+
+  const updateSelected = (patch: Partial<Omit<FilterNodeConfig, 'id'>>) => {
+    if (!selected) return
+    onFiltersChange(filters.map((filter) => filter.id === selected.id
+      ? { ...filter, ...patch }
+      : filter))
+  }
+
+  const changeType = (type: FilterKind) => {
+    if (!selected) return
+    const defaults = createFilterNodeConfig(type, selected.id)
+    updateSelected({
+      ...defaults,
+      enabled: selected.enabled,
+      frequencyHz: Math.min(defaults.frequencyHz, maximumFrequency),
+    })
+  }
+
+  const removeSelected = () => {
+    if (!selected) return
+    const index = filters.findIndex((filter) => filter.id === selected.id)
+    const next = filters.filter((filter) => filter.id !== selected.id)
+    onFiltersChange(next)
+    setSelectedId(next[Math.min(index, next.length - 1)]?.id ?? null)
+  }
+
+  const moveSelected = (direction: -1 | 1) => {
+    if (!selected) return
+    const index = filters.findIndex((filter) => filter.id === selected.id)
+    const target = index + direction
+    if (index < 0 || target < 0 || target >= filters.length) return
+    const next = [...filters]
+    const [moved] = next.splice(index, 1)
+    if (!moved) return
+    next.splice(target, 0, moved)
+    onFiltersChange(next)
+  }
+
+  return (
+    <main className="filter-lab-page">
+      <header className="filter-lab-header panel-surface">
+        <div>
+          <span className="eyebrow">NON-DESTRUCTIVE AUDITION</span>
+          <h1><SlidersHorizontal size={18} /> 滤波器选项与节点编译器</h1>
+          <p>串行编译 Web Audio 滤波节点；试听链不会修改源 PCM、分析结果或导出内容。</p>
+        </div>
+        <div className="filter-compile-status" aria-live="polite">
+          <CheckCircle2 size={15} />
+          <span><strong>{hasAudio ? '图已编译' : '配置已就绪'}</strong><small>{activeCount} 个活动节点 · {filters.length - activeCount} 个旁路</small></span>
+        </div>
+      </header>
+
+      <section className="filter-lab-grid">
+        <aside className="filter-palette panel-surface" aria-label="滤波器节点库">
+          <div className="filter-pane-heading">
+            <span className="eyebrow">NODE LIBRARY</span>
+            <h2>滤波器</h2>
+          </div>
+          <div className="filter-palette-list">
+            {FILTER_TYPES.map((type) => {
+              const definition = FILTER_DEFINITIONS[type]
+              return (
+                <button
+                  key={type}
+                  type="button"
+                  disabled={filters.length >= MAX_FILTER_NODES}
+                  onClick={() => addFilter(type)}
+                >
+                  <span className="filter-palette-icon"><Waves size={14} /></span>
+                  <span><strong>{definition.label}</strong><small>{definition.description}</small></span>
+                  <span className="filter-add-mark">+</span>
+                </button>
+              )
+            })}
+          </div>
+          <p className="filter-pane-note">最多 {MAX_FILTER_NODES} 个节点。信号按画布中的顺序从左到右处理。</p>
+        </aside>
+
+        <section className="filter-graph-panel panel-surface">
+          <div className="filter-graph-toolbar">
+            <div>
+              <span className="eyebrow">SERIAL SIGNAL GRAPH</span>
+              <h2>节点画布</h2>
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={filters.length === 0}
+              onClick={() => { onFiltersChange([]); setSelectedId(null) }}
+            ><RotateCcw size={13} /> 清空链路</button>
+          </div>
+
+          <div className="filter-graph-canvas" aria-label="串行滤波节点图">
+            <div className="signal-terminal input"><AudioWaveform size={18} /><strong>输入</strong><small>原始 PCM</small></div>
+            <span className="signal-connector"><Cable size={15} /></span>
+            {filters.map((filter, index) => {
+              const definition = FILTER_DEFINITIONS[filter.type]
+              return (
+                <div className="filter-node-wrap" key={filter.id}>
+                  <button
+                    type="button"
+                    className={`filter-node ${effectiveSelectedId === filter.id ? 'selected' : ''} ${filter.enabled ? '' : 'bypassed'}`}
+                    aria-pressed={effectiveSelectedId === filter.id}
+                    onClick={() => setSelectedId(filter.id)}
+                  >
+                    <span className="filter-node-index">{String(index + 1).padStart(2, '0')}</span>
+                    <span className="filter-node-type">{definition.label}</span>
+                    <strong>{formatFrequency(filter.frequencyHz)}</strong>
+                    <small>{filter.enabled ? 'ACTIVE' : 'BYPASS'}</small>
+                  </button>
+                  <span className="signal-connector"><Cable size={15} /></span>
+                </div>
+              )
+            })}
+            <div className="signal-terminal output"><Volume2 size={18} /><strong>输出</strong><small>监听总线</small></div>
+          </div>
+
+          {filters.length === 0 && (
+            <div className="filter-graph-empty">
+              <SlidersHorizontal size={25} />
+              <strong>从左侧添加第一个滤波器</strong>
+              <span>节点会自动串联，并可在播放过程中重新编译。</span>
+            </div>
+          )}
+
+          <div className="audition-console">
+            <div className="audition-copy">
+              <span className={`audition-light ${playing ? 'live' : ''}`} />
+              <span><strong>{hasAudio ? (playing ? '正在实时试听' : '已连接当前音频') : '等待导入音频'}</strong><small>A/B 切换使用短增益斜坡，不会重启播放头</small></span>
+            </div>
+            <div className="audition-switch" role="group" aria-label="滤波前后试听对比">
+              <button
+                type="button"
+                className={auditionMode === 'original' ? 'active' : ''}
+                aria-pressed={auditionMode === 'original'}
+                onClick={() => onAuditionModeChange('original')}
+              ><span>A</span> 原始音频</button>
+              <button
+                type="button"
+                disabled={filters.length === 0}
+                className={auditionMode === 'filtered' ? 'active' : ''}
+                aria-pressed={auditionMode === 'filtered'}
+                onClick={() => onAuditionModeChange('filtered')}
+              ><span>B</span> 滤波效果</button>
+            </div>
+          </div>
+        </section>
+
+        <aside className="filter-inspector panel-surface">
+          <div className="filter-pane-heading">
+            <span className="eyebrow">NODE OPTIONS</span>
+            <h2>节点参数</h2>
+          </div>
+          {selected ? (
+            <div className="filter-inspector-form">
+              <div className="filter-selected-summary">
+                <span className="filter-palette-icon"><SlidersHorizontal size={15} /></span>
+                <span><strong>{FILTER_DEFINITIONS[selected.type].label}</strong><small>{FILTER_DEFINITIONS[selected.type].description}</small></span>
+              </div>
+
+              <label className="filter-field">
+                <span>滤波器类型</span>
+                <select value={selected.type} onChange={(event) => changeType(event.target.value as FilterKind)}>
+                  {FILTER_TYPES.map((type) => <option key={type} value={type}>{FILTER_DEFINITIONS[type].label}</option>)}
+                </select>
+              </label>
+
+              <label className="filter-field filter-slider-field">
+                <span>频率 <output>{formatFrequency(selected.frequencyHz)}</output></span>
+                <input
+                  type="range"
+                  min={20}
+                  max={maximumFrequency}
+                  step={1}
+                  value={clamp(selected.frequencyHz, 20, maximumFrequency)}
+                  onChange={(event) => updateSelected({ frequencyHz: Number(event.target.value) })}
+                />
+                <span className="filter-number-input"><input type="number" min={1} max={maximumFrequency} step={1} value={selected.frequencyHz} onChange={(event) => updateSelected({ frequencyHz: clamp(Number(event.target.value), 1, maximumFrequency) })} /><small>Hz</small></span>
+              </label>
+
+              <label className={`filter-field filter-slider-field ${FILTER_DEFINITIONS[selected.type].usesQ ? '' : 'inactive'}`}>
+                <span>Q 值 <output>{selected.q.toFixed(2)}</output></span>
+                <input type="range" min={0.1} max={20} step={0.1} disabled={!FILTER_DEFINITIONS[selected.type].usesQ} value={clamp(selected.q, 0.1, 20)} onChange={(event) => updateSelected({ q: Number(event.target.value) })} />
+                <span className="filter-number-input"><input type="number" min={0.01} max={1000} step={0.1} disabled={!FILTER_DEFINITIONS[selected.type].usesQ} value={selected.q} onChange={(event) => updateSelected({ q: clamp(Number(event.target.value), 0.01, 1_000) })} /><small>Q</small></span>
+              </label>
+
+              <label className={`filter-field filter-slider-field ${FILTER_DEFINITIONS[selected.type].usesGain ? '' : 'inactive'}`}>
+                <span>增益 <output>{selected.gainDb > 0 ? '+' : ''}{selected.gainDb.toFixed(1)} dB</output></span>
+                <input type="range" min={-24} max={24} step={0.5} disabled={!FILTER_DEFINITIONS[selected.type].usesGain} value={clamp(selected.gainDb, -24, 24)} onChange={(event) => updateSelected({ gainDb: Number(event.target.value) })} />
+                <span className="filter-number-input"><input type="number" min={-40} max={40} step={0.5} disabled={!FILTER_DEFINITIONS[selected.type].usesGain} value={selected.gainDb} onChange={(event) => updateSelected({ gainDb: clamp(Number(event.target.value), -40, 40) })} /><small>dB</small></span>
+              </label>
+
+              <button type="button" className={`filter-bypass-button ${selected.enabled ? '' : 'active'}`} onClick={() => updateSelected({ enabled: !selected.enabled })}>
+                <Power size={14} />
+                <span><strong>{selected.enabled ? '节点已启用' : '节点已旁路'}</strong><small>旁路后重新编译，其余节点保持连接</small></span>
+              </button>
+
+              <div className="filter-node-actions">
+                <button type="button" className="secondary-button" disabled={filters[0]?.id === selected.id} onClick={() => moveSelected(-1)}><ArrowLeft size={13} /> 前移</button>
+                <button type="button" className="secondary-button" disabled={filters.at(-1)?.id === selected.id} onClick={() => moveSelected(1)}>后移 <ArrowRight size={13} /></button>
+                <button type="button" className="secondary-button danger" onClick={removeSelected}><Trash2 size={13} /> 删除</button>
+              </div>
+
+              <p className="filter-runtime-note">当前 Nyquist：{formatFrequency(nyquist)}。超出当前设备范围的频率会由 Web Audio 安全钳位。</p>
+            </div>
+          ) : (
+            <div className="filter-inspector-empty"><SlidersHorizontal size={24} /><strong>未选择节点</strong><span>添加或点击画布中的节点以编辑参数。</span></div>
+          )}
+        </aside>
+      </section>
+    </main>
+  )
+}

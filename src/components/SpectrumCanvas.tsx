@@ -82,7 +82,7 @@ export function SpectrumCanvas({
 
     context.strokeStyle = 'rgba(145, 165, 190, 0.12)'
     context.fillStyle = '#8290a3'
-    context.font = '10px Inter, system-ui, sans-serif'
+    context.font = '13px Inter, system-ui, sans-serif'
     context.lineWidth = 1
     for (let index = 0; index <= 4; index += 1) {
       const y = PLOT_MARGIN.top + (plotHeight * index) / 4
@@ -124,7 +124,7 @@ export function SpectrumCanvas({
     if (emptyMessage) {
       context.fillStyle = '#6f7d91'
       context.textAlign = 'center'
-      context.font = '12px Inter, system-ui, sans-serif'
+      context.font = '15px Inter, system-ui, sans-serif'
       context.fillText(
         emptyMessage,
         PLOT_MARGIN.left + plotWidth / 2,
