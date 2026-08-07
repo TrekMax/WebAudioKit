@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import {
   MIN_TRACK_LANE_HEIGHT,
+  buildTrackPreviewAxes,
   buildTrackOverview,
   buildTrackSpectrogramPixels,
   defaultTrackLaneHeight,
   maximumTrackLaneHeight,
+  trackPreviewAxisValueToPosition,
 } from './trackPreview'
 
 describe('buildTrackOverview', () => {
@@ -54,5 +56,53 @@ describe('buildTrackOverview', () => {
       height: 1,
     })
     expect(() => buildTrackSpectrogramPixels(result, new Float32Array(1))).toThrow(RangeError)
+  })
+
+  it('builds matching axes for waveform, spectrum, and spectrogram lanes', () => {
+    const analysis = {
+      sampleRate: 48_000,
+      range: { start: 48_000, end: 144_000 },
+      minDb: -96,
+      maxDb: -6,
+      timesSeconds: Float64Array.from([1.1, 2, 2.9]),
+      frequenciesHz: Float64Array.from([0, 12_000, 24_000]),
+    }
+
+    const waveform = buildTrackPreviewAxes({
+      mode: 'waveform',
+      durationSeconds: 3,
+      analysis: null,
+    })
+    expect(waveform.horizontal).toMatchObject({ minimum: 0, maximum: 3, scale: 'linear' })
+    expect(waveform.horizontal.ticks.map((tick) => tick.label)).toEqual([
+      '0 s', '0.8 s', '1.5 s', '2.3 s', '3 s',
+    ])
+    expect(waveform.vertical.ticks.map((tick) => tick.label)).toEqual(['-1', '0', '+1'])
+    expect(trackPreviewAxisValueToPosition(waveform.vertical, 0)).toBe(0.5)
+
+    const spectrum = buildTrackPreviewAxes({
+      mode: 'spectrum',
+      durationSeconds: 3,
+      analysis,
+    })
+    expect(spectrum.horizontal).toMatchObject({ minimum: 20, maximum: 24_000, scale: 'log' })
+    expect(spectrum.horizontal.ticks.at(-1)?.label).toBe('24 kHz')
+    expect(spectrum.vertical).toMatchObject({ minimum: -96, maximum: -6, unitLabel: 'dBFS' })
+    expect(trackPreviewAxisValueToPosition(spectrum.horizontal, 20)).toBe(0)
+    expect(trackPreviewAxisValueToPosition(spectrum.horizontal, 24_000)).toBe(1)
+    expect(trackPreviewAxisValueToPosition(spectrum.vertical, -51)).toBe(0.5)
+
+    const spectrogram = buildTrackPreviewAxes({
+      mode: 'spectrogram',
+      durationSeconds: 3,
+      analysis,
+      horizontalTickCount: 3,
+      verticalTickCount: 3,
+    })
+    expect(spectrogram.horizontal).toMatchObject({ minimum: 1.1, maximum: 2.9 })
+    expect(spectrogram.horizontal.ticks.map((tick) => tick.label)).toEqual(['1.1 s', '2 s', '2.9 s'])
+    expect(spectrogram.vertical.ticks.map((tick) => tick.label)).toEqual([
+      '0 Hz', '12 kHz', '24 kHz',
+    ])
   })
 })

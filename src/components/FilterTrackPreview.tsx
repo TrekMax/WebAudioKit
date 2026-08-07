@@ -22,10 +22,13 @@ import {
 import { useElementSize } from '../hooks/useElementSize'
 import {
   MIN_TRACK_LANE_HEIGHT,
+  buildTrackPreviewAxes,
   buildTrackOverview,
   buildTrackSpectrogramPixels,
   defaultTrackLaneHeight,
   maximumTrackLaneHeight,
+  trackPreviewAxisValueToPosition,
+  type TrackPreviewAxes,
   type TrackOverview,
 } from '../visualization/trackPreview'
 
@@ -59,6 +62,7 @@ interface TrackLaneProps {
   readonly disabled?: boolean
   readonly playing: boolean
   readonly progress: number
+  readonly durationSeconds: number
   readonly overview: TrackOverview
   readonly width: number
   readonly height: number
@@ -70,6 +74,71 @@ interface TrackLaneProps {
   readonly onSelect: () => void
 }
 
+const TRACK_PLOT_MARGIN = {
+  top: 12,
+  right: 14,
+  bottom: 24,
+  left: 176,
+} as const
+
+interface TrackPlotBounds {
+  readonly left: number
+  readonly top: number
+  readonly width: number
+  readonly height: number
+}
+
+function drawTrackAxes(
+  context: CanvasRenderingContext2D,
+  axes: TrackPreviewAxes,
+  bounds: TrackPlotBounds,
+  canvasHeight: number,
+  active: boolean,
+): void {
+  const right = bounds.left + bounds.width
+  const bottom = bounds.top + bounds.height
+  context.save()
+  context.lineWidth = 1
+  context.strokeStyle = active ? 'rgba(31,223,178,0.14)' : 'rgba(92,112,132,0.14)'
+  context.fillStyle = active ? '#81968f' : '#738393'
+  context.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace'
+
+  for (const [index, tick] of axes.horizontal.ticks.entries()) {
+    const x = bounds.left + tick.position * bounds.width
+    context.beginPath()
+    context.moveTo(x + 0.5, bounds.top)
+    context.lineTo(x + 0.5, bottom)
+    context.stroke()
+    context.textBaseline = 'alphabetic'
+    context.textAlign = index === 0
+      ? 'left'
+      : index === axes.horizontal.ticks.length - 1
+        ? 'right'
+        : 'center'
+    context.fillText(tick.label, x, canvasHeight - 7)
+  }
+
+  for (const tick of axes.vertical.ticks) {
+    const y = bottom - tick.position * bounds.height
+    context.beginPath()
+    context.moveTo(bounds.left, y + 0.5)
+    context.lineTo(right, y + 0.5)
+    context.stroke()
+    context.textAlign = 'right'
+    context.textBaseline = 'middle'
+    context.fillText(tick.label, bounds.left - 7, y)
+  }
+
+  context.strokeStyle = active ? 'rgba(31,223,178,0.28)' : 'rgba(112,132,152,0.24)'
+  context.strokeRect(bounds.left + 0.5, bounds.top + 0.5, bounds.width - 1, bounds.height - 1)
+  context.fillStyle = active ? 'rgba(177,207,197,0.82)' : 'rgba(151,168,184,0.78)'
+  context.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace'
+  context.textAlign = 'left'
+  context.textBaseline = 'top'
+  context.fillText(axes.vertical.unitLabel, bounds.left + 5, bounds.top + 4)
+  context.restore()
+}
+
 function TrackLane({
   mode,
   title,
@@ -79,6 +148,7 @@ function TrackLane({
   disabled = false,
   playing,
   progress,
+  durationSeconds,
   overview,
   width,
   height,
@@ -121,34 +191,32 @@ function TrackLane({
     context.setTransform(dpr, 0, 0, dpr, 0, 0)
     context.clearRect(0, 0, width, height)
 
-    const plotLeft = 142
-    const plotRight = 14
-    const plotWidth = Math.max(1, width - plotLeft - plotRight)
+    const plotLeft = TRACK_PLOT_MARGIN.left
+    const plotTop = TRACK_PLOT_MARGIN.top
+    const plotWidth = Math.max(1, width - plotLeft - TRACK_PLOT_MARGIN.right)
+    const plotHeight = Math.max(1, height - plotTop - TRACK_PLOT_MARGIN.bottom)
+    const plotBottom = plotTop + plotHeight
+    const axes = buildTrackPreviewAxes({
+      mode: viewMode,
+      durationSeconds,
+      analysis: viewMode === 'spectrum'
+        ? spectrum
+        : viewMode === 'spectrogram'
+          ? spectrogram
+          : null,
+      horizontalTickCount: plotWidth < 320 ? 3 : 5,
+      verticalTickCount: plotHeight < 54 ? 3 : 5,
+    })
+    context.fillStyle = 'rgba(5,10,16,0.58)'
+    context.fillRect(plotLeft, plotTop, plotWidth, plotHeight)
     if (viewMode === 'spectrogram' && spectrogramBitmap) {
       context.imageSmoothingEnabled = true
-      context.drawImage(spectrogramBitmap, plotLeft, 0, plotWidth, height)
+      context.drawImage(spectrogramBitmap, plotLeft, plotTop, plotWidth, plotHeight)
     }
-    context.strokeStyle = active ? 'rgba(31,223,178,0.13)' : 'rgba(76,96,116,0.13)'
-    context.lineWidth = 1
-    for (let line = 0; line <= 8; line += 1) {
-      const x = plotLeft + (line / 8) * plotWidth
-      context.beginPath()
-      context.moveTo(x, 0)
-      context.lineTo(x, height)
-      context.stroke()
-    }
-    if (viewMode === 'spectrogram') {
-      for (let line = 1; line < 4; line += 1) {
-        const y = (line / 4) * height
-        context.beginPath()
-        context.moveTo(plotLeft, y)
-        context.lineTo(plotLeft + plotWidth, y)
-        context.stroke()
-      }
-    }
+    drawTrackAxes(context, axes, { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight }, height, active)
 
     if (viewMode === 'waveform') {
-      const center = height / 2
+      const center = plotTop + plotHeight / 2
       const { mins, maxs } = overview
       context.strokeStyle = disabled ? '#4c5966' : color
       context.globalAlpha = disabled ? 0.42 : active ? 0.95 : 0.62
@@ -156,8 +224,8 @@ function TrackLane({
       context.beginPath()
       for (let column = 0; column < mins.length; column += 1) {
         const x = plotLeft + (column / Math.max(1, mins.length - 1)) * plotWidth
-        const top = center - (maxs[column] ?? 0) * (height * 0.38)
-        const bottom = center - (mins[column] ?? 0) * (height * 0.38)
+        const top = center - (maxs[column] ?? 0) * (plotHeight / 2)
+        const bottom = center - (mins[column] ?? 0) * (plotHeight / 2)
         context.moveTo(x, top)
         context.lineTo(x, bottom)
       }
@@ -168,8 +236,8 @@ function TrackLane({
       context.strokeStyle = active ? '#f4fbf8' : 'rgba(210,222,232,0.38)'
       context.lineWidth = active ? 1.5 : 1
       context.beginPath()
-      context.moveTo(cursorX, 5)
-      context.lineTo(cursorX, height - 5)
+      context.moveTo(cursorX, plotTop + 3)
+      context.lineTo(cursorX, plotBottom - 3)
       context.stroke()
     } else if (
       viewMode === 'spectrum'
@@ -178,37 +246,34 @@ function TrackLane({
       && spectrum.binCount > 1
     ) {
       const frameOffset = (spectrum.frameCount - 1) * spectrum.binCount
-      const maximumFrequencyHz = spectrum.frequenciesHz.at(-1) ?? 0
-      const minimumFrequencyHz = Math.min(20, maximumFrequencyHz)
-      const frequencySpan = Math.max(1, Math.log10(Math.max(1, maximumFrequencyHz)) - Math.log10(Math.max(1, minimumFrequencyHz)))
       const filterResponseDb = mode === 'filtered'
         ? getFilterFrequencyResponseDb(Float32Array.from(spectrum.frequenciesHz))
         : null
       const points: Array<readonly [number, number]> = []
       for (let bin = 0; bin < spectrum.binCount; bin += 1) {
         const frequencyHz = spectrum.frequenciesHz[bin] ?? 0
-        if (frequencyHz < minimumFrequencyHz || frequencyHz > maximumFrequencyHz) continue
+        if (frequencyHz < axes.horizontal.minimum || frequencyHz > axes.horizontal.maximum) continue
         const sourceDb = spectrum.valuesDbfs[frameOffset + bin] ?? spectrum.minDb
         const responseDb = filterResponseDb?.[bin] ?? 0
         const valueDb = sourceDb + responseDb
-        const unitX = (Math.log10(Math.max(1, frequencyHz)) - Math.log10(Math.max(1, minimumFrequencyHz))) / frequencySpan
-        const unitY = Math.max(0, Math.min(1, (valueDb - spectrum.minDb) / (spectrum.maxDb - spectrum.minDb)))
+        const unitX = Math.max(0, Math.min(1, trackPreviewAxisValueToPosition(axes.horizontal, frequencyHz)))
+        const unitY = Math.max(0, Math.min(1, trackPreviewAxisValueToPosition(axes.vertical, valueDb)))
         points.push([
           plotLeft + unitX * plotWidth,
-          6 + (1 - unitY) * Math.max(1, height - 12),
+          plotTop + (1 - unitY) * plotHeight,
         ])
       }
       const first = points[0]
       if (first && points.length > 1) {
-        const gradient = context.createLinearGradient(0, height, 0, 0)
+        const gradient = context.createLinearGradient(0, plotBottom, 0, plotTop)
         gradient.addColorStop(0, 'rgba(31,223,178,0.015)')
         gradient.addColorStop(1, mode === 'filtered' ? 'rgba(31,223,178,0.22)' : 'rgba(100,169,255,0.2)')
         context.beginPath()
-        context.moveTo(first[0], height - 5)
+        context.moveTo(first[0], plotBottom)
         context.lineTo(first[0], first[1])
         for (const point of points.slice(1)) context.lineTo(point[0], point[1])
         const last = points.at(-1)
-        if (last) context.lineTo(last[0], height - 5)
+        if (last) context.lineTo(last[0], plotBottom)
         context.closePath()
         context.fillStyle = gradient
         context.fill()
@@ -227,14 +292,14 @@ function TrackLane({
         context.fillStyle = '#647586'
         context.font = '12px Inter, system-ui, sans-serif'
         context.textAlign = 'center'
-        context.fillText('完成 FFT 分析后显示二维声谱', plotLeft + plotWidth / 2, height / 2)
+        context.fillText('完成 FFT 分析后显示二维声谱', plotLeft + plotWidth / 2, plotTop + plotHeight / 2)
       } else {
         const cursorX = plotLeft + progress * plotWidth
         context.strokeStyle = active ? '#f4fbf8' : 'rgba(255,179,92,0.68)'
         context.lineWidth = active ? 1.5 : 1
         context.beginPath()
-        context.moveTo(cursorX, 4)
-        context.lineTo(cursorX, height - 4)
+        context.moveTo(cursorX, plotTop + 3)
+        context.lineTo(cursorX, plotBottom - 3)
         context.stroke()
       }
     }
@@ -242,12 +307,14 @@ function TrackLane({
     active,
     color,
     disabled,
+    durationSeconds,
     getFilterFrequencyResponseDb,
     height,
     mode,
     overview,
     progress,
     spectrum,
+    spectrogram,
     spectrogramBitmap,
     viewMode,
     width,
@@ -322,11 +389,16 @@ export function FilterTrackPreview({
       ? getFilterFrequencyResponseDb(Float32Array.from(spectrogram.frequenciesHz))
       : null
   ), [filterResponseRevision, getFilterFrequencyResponseDb, spectrogram])
-  const spectrogramProgress = spectrogram && spectrogram.range.end > spectrogram.range.start
+  const spectrogramStartTime = spectrogram?.timesSeconds[0]
+  const spectrogramEndTime = spectrogram?.timesSeconds.at(-1)
+  const spectrogramProgress = spectrogram
+    && typeof spectrogramStartTime === 'number'
+    && typeof spectrogramEndTime === 'number'
+    && spectrogramEndTime > spectrogramStartTime
     ? Math.max(0, Math.min(
         1,
-        (currentSample - spectrogram.range.start)
-          / (spectrogram.range.end - spectrogram.range.start),
+        (currentSample / spectrogram.sampleRate - spectrogramStartTime)
+          / (spectrogramEndTime - spectrogramStartTime),
       ))
     : progress
   const laneProgress = viewMode === 'spectrogram' ? spectrogramProgress : progress
@@ -455,6 +527,7 @@ export function FilterTrackPreview({
           active={auditionMode === 'original'}
           playing={playing}
           progress={laneProgress}
+          durationSeconds={buffer?.duration ?? 0}
           overview={overview}
           width={laneWidth}
           height={trackHeight}
@@ -478,6 +551,7 @@ export function FilterTrackPreview({
           disabled={filters.length === 0}
           playing={playing}
           progress={laneProgress}
+          durationSeconds={buffer?.duration ?? 0}
           overview={overview}
           width={laneWidth}
           height={trackHeight}
