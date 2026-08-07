@@ -68,6 +68,7 @@ interface FilterLabProps {
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
   readonly onFiltersChange: (filters: readonly FilterNodeConfig[]) => void
   readonly onAuditionModeChange: (mode: FilterAuditionMode) => void
+  readonly onSeekSample: (sample: number) => void
   readonly onVolumeChange: (volume: number) => void
   readonly onOutputChannelEnabledChange: (channelIndex: 0 | 1, enabled: boolean) => void
   readonly onOutputBalanceChange: (balance: number) => void
@@ -139,6 +140,7 @@ export function FilterLab({
   getFilterFrequencyResponseDb,
   onFiltersChange,
   onAuditionModeChange,
+  onSeekSample,
   onVolumeChange,
   onOutputChannelEnabledChange,
   onOutputBalanceChange,
@@ -815,6 +817,7 @@ export function FilterLab({
             spectrogram={spectrogram}
             getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
             onAuditionModeChange={onAuditionModeChange}
+            onSeekSample={onSeekSample}
           />
         </section>
 

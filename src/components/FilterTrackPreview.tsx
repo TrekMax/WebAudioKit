@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type {
   KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
+  WheelEvent as ReactWheelEvent,
 } from 'react'
 import {
   Activity,
   AudioWaveform,
   GripHorizontal,
+  Maximize2,
   MoveVertical,
   Radio,
   ScanLine,
@@ -23,13 +26,19 @@ import { useElementSize } from '../hooks/useElementSize'
 import {
   MIN_TRACK_LANE_HEIGHT,
   buildTrackPreviewAxes,
-  buildTrackOverview,
+  buildTrackOverviewRange,
   buildTrackSpectrogramPixels,
+  createTrackTimeViewport,
   defaultTrackLaneHeight,
   maximumTrackLaneHeight,
+  resolveTrackTimeViewport,
   trackPreviewAxisValueToPosition,
+  trackTimeViewportPositionForSample,
+  trackTimeViewportSampleAtPosition,
   type TrackPreviewAxes,
   type TrackOverview,
+  type TrackTimeViewport,
+  zoomTrackTimeViewport,
 } from '../visualization/trackPreview'
 
 interface FilterTrackPreviewProps {
@@ -42,6 +51,7 @@ interface FilterTrackPreviewProps {
   readonly spectrogram: StftPreviewResult | null
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
   readonly onAuditionModeChange: (mode: FilterAuditionMode) => void
+  readonly onSeekSample: (sample: number) => void
 }
 
 type TrackViewMode = 'waveform' | 'spectrum' | 'spectrogram'
@@ -53,6 +63,13 @@ interface TrackResizeSession {
   readonly maximumHeight: number
 }
 
+interface TrackTimeViewportState {
+  readonly viewport: TrackTimeViewport
+  readonly buffer: AudioBuffer | null
+  readonly viewMode: TrackViewMode
+  readonly spectrogram: StftPreviewResult | null
+}
+
 interface TrackLaneProps {
   readonly mode: FilterAuditionMode
   readonly title: string
@@ -61,7 +78,8 @@ interface TrackLaneProps {
   readonly active: boolean
   readonly disabled?: boolean
   readonly playing: boolean
-  readonly progress: number
+  readonly currentSample: number
+  readonly sampleRate: number
   readonly durationSeconds: number
   readonly overview: TrackOverview
   readonly width: number
@@ -70,8 +88,12 @@ interface TrackLaneProps {
   readonly spectrum: StftPreviewResult | null
   readonly spectrogram: StftPreviewResult | null
   readonly spectrogramResponseDb: Float32Array | null
+  readonly timeViewport: TrackTimeViewport
+  readonly minimumTimeSpanSamples: number
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
   readonly onSelect: () => void
+  readonly onSeekSample: (sample: number) => void
+  readonly onTimeViewportChange: (viewport: TrackTimeViewport) => void
 }
 
 const TRACK_PLOT_MARGIN = {
@@ -86,6 +108,53 @@ interface TrackPlotBounds {
   readonly top: number
   readonly width: number
   readonly height: number
+}
+
+function trackPlotPositionAtClientX(
+  target: HTMLElement,
+  clientX: number,
+): number | null {
+  const rect = target.getBoundingClientRect()
+  const plotWidth = rect.width - TRACK_PLOT_MARGIN.left - TRACK_PLOT_MARGIN.right
+  const localX = clientX - rect.left - TRACK_PLOT_MARGIN.left
+  if (plotWidth <= 0 || localX < 0 || localX > plotWidth) return null
+  return localX / plotWidth
+}
+
+function resolvePreviewTimeDomain(
+  buffer: AudioBuffer | null,
+  viewMode: TrackViewMode,
+  spectrogram: StftPreviewResult | null,
+): readonly [number, number] {
+  const sourceLength = buffer?.length ?? 0
+  if (!buffer || sourceLength <= 0 || viewMode !== 'spectrogram' || !spectrogram) {
+    return [0, sourceLength]
+  }
+
+  const firstTime = spectrogram.timesSeconds[0]
+  const lastTime = spectrogram.timesSeconds.at(-1)
+  if (
+    typeof firstTime === 'number'
+    && typeof lastTime === 'number'
+    && Number.isFinite(firstTime)
+    && Number.isFinite(lastTime)
+    && lastTime > firstTime
+  ) {
+    const startSample = Math.max(0, Math.min(sourceLength, Math.round(firstTime * buffer.sampleRate)))
+    const endSample = Math.max(0, Math.min(sourceLength, Math.round(lastTime * buffer.sampleRate)))
+    if (endSample > startSample) return [startSample, endSample]
+  }
+
+  const scale = buffer.sampleRate / spectrogram.sampleRate
+  const startSample = Math.max(
+    0,
+    Math.min(sourceLength, Math.round(spectrogram.range.start * scale)),
+  )
+  const endSample = Math.max(
+    0,
+    Math.min(sourceLength, Math.round(spectrogram.range.end * scale)),
+  )
+  return endSample > startSample ? [startSample, endSample] : [0, sourceLength]
 }
 
 function drawTrackAxes(
@@ -147,7 +216,8 @@ function TrackLane({
   active,
   disabled = false,
   playing,
-  progress,
+  currentSample,
+  sampleRate,
   durationSeconds,
   overview,
   width,
@@ -156,10 +226,18 @@ function TrackLane({
   spectrum,
   spectrogram,
   spectrogramResponseDb,
+  timeViewport,
+  minimumTimeSpanSamples,
   getFilterFrequencyResponseDb,
   onSelect,
+  onSeekSample,
+  onTimeViewportChange,
 }: TrackLaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const timeMode = viewMode !== 'spectrum'
+  const playheadPosition = timeMode
+    ? trackTimeViewportPositionForSample(timeViewport, currentSample)
+    : null
   const spectrogramBitmap = useMemo(() => {
     if (viewMode !== 'spectrogram' || !spectrogram) return null
     const raster = buildTrackSpectrogramPixels(
@@ -204,6 +282,9 @@ function TrackLane({
         : viewMode === 'spectrogram'
           ? spectrogram
           : null,
+      timeRangeSeconds: timeMode && sampleRate > 0
+        ? [timeViewport.startSample / sampleRate, timeViewport.endSample / sampleRate]
+        : undefined,
       horizontalTickCount: plotWidth < 320 ? 3 : 5,
       verticalTickCount: plotHeight < 54 ? 3 : 5,
     })
@@ -211,7 +292,26 @@ function TrackLane({
     context.fillRect(plotLeft, plotTop, plotWidth, plotHeight)
     if (viewMode === 'spectrogram' && spectrogramBitmap) {
       context.imageSmoothingEnabled = true
-      context.drawImage(spectrogramBitmap, plotLeft, plotTop, plotWidth, plotHeight)
+      const domainSpan = timeViewport.domainEndSample - timeViewport.domainStartSample
+      const sourceStart = domainSpan > 0
+        ? ((timeViewport.startSample - timeViewport.domainStartSample) / domainSpan)
+          * spectrogramBitmap.width
+        : 0
+      const sourceWidth = domainSpan > 0
+        ? ((timeViewport.endSample - timeViewport.startSample) / domainSpan)
+          * spectrogramBitmap.width
+        : spectrogramBitmap.width
+      context.drawImage(
+        spectrogramBitmap,
+        sourceStart,
+        0,
+        Math.max(1, sourceWidth),
+        spectrogramBitmap.height,
+        plotLeft,
+        plotTop,
+        plotWidth,
+        plotHeight,
+      )
     }
     drawTrackAxes(context, axes, { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight }, height, active)
 
@@ -232,13 +332,15 @@ function TrackLane({
       context.stroke()
       context.globalAlpha = 1
 
-      const cursorX = plotLeft + progress * plotWidth
-      context.strokeStyle = active ? '#f4fbf8' : 'rgba(210,222,232,0.38)'
-      context.lineWidth = active ? 1.5 : 1
-      context.beginPath()
-      context.moveTo(cursorX, plotTop + 3)
-      context.lineTo(cursorX, plotBottom - 3)
-      context.stroke()
+      if (playheadPosition !== null) {
+        const cursorX = plotLeft + playheadPosition * plotWidth
+        context.strokeStyle = active ? '#f4fbf8' : 'rgba(210,222,232,0.38)'
+        context.lineWidth = active ? 1.5 : 1
+        context.beginPath()
+        context.moveTo(cursorX, plotTop + 3)
+        context.lineTo(cursorX, plotBottom - 3)
+        context.stroke()
+      }
     } else if (
       viewMode === 'spectrum'
       && spectrum
@@ -294,13 +396,15 @@ function TrackLane({
         context.textAlign = 'center'
         context.fillText('完成 FFT 分析后显示二维声谱', plotLeft + plotWidth / 2, plotTop + plotHeight / 2)
       } else {
-        const cursorX = plotLeft + progress * plotWidth
-        context.strokeStyle = active ? '#f4fbf8' : 'rgba(255,179,92,0.68)'
-        context.lineWidth = active ? 1.5 : 1
-        context.beginPath()
-        context.moveTo(cursorX, plotTop + 3)
-        context.lineTo(cursorX, plotBottom - 3)
-        context.stroke()
+        if (playheadPosition !== null) {
+          const cursorX = plotLeft + playheadPosition * plotWidth
+          context.strokeStyle = active ? '#f4fbf8' : 'rgba(255,179,92,0.68)'
+          context.lineWidth = active ? 1.5 : 1
+          context.beginPath()
+          context.moveTo(cursorX, plotTop + 3)
+          context.lineTo(cursorX, plotBottom - 3)
+          context.stroke()
+        }
       }
     }
   }, [
@@ -312,22 +416,49 @@ function TrackLane({
     height,
     mode,
     overview,
-    progress,
+    playheadPosition,
+    sampleRate,
     spectrum,
     spectrogram,
     spectrogramBitmap,
+    timeMode,
+    timeViewport,
     viewMode,
     width,
   ])
+
+  const handleClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    onSelect()
+    if (!timeMode) return
+    const position = trackPlotPositionAtClientX(event.currentTarget, event.clientX)
+    if (position === null) return
+    onSeekSample(trackTimeViewportSampleAtPosition(timeViewport, position))
+  }
+
+  const handleWheel = (event: ReactWheelEvent<HTMLButtonElement>) => {
+    if (!timeMode) return
+    const position = trackPlotPositionAtClientX(event.currentTarget, event.clientX)
+    if (position === null) return
+    event.preventDefault()
+    const anchorSample = trackTimeViewportSampleAtPosition(timeViewport, position)
+    onTimeViewportChange(zoomTrackTimeViewport(
+      timeViewport,
+      anchorSample,
+      event.deltaY,
+      minimumTimeSpanSamples,
+    ))
+  }
 
   return (
     <button
       type="button"
       className={`audition-track ${active ? 'active' : ''}`}
       aria-pressed={active}
+      aria-label={`${title}；${timeMode ? '点击绘图区跳转时间，滚轮缩放时间轴' : '点击切换试听'}`}
       disabled={disabled}
       style={{ height: `${height}px` }}
-      onClick={onSelect}
+      onClick={handleClick}
+      onWheel={handleWheel}
     >
       <canvas ref={canvasRef} aria-hidden="true" />
       <span className="audition-track-copy">
@@ -349,6 +480,7 @@ export function FilterTrackPreview({
   spectrogram,
   getFilterFrequencyResponseDb,
   onAuditionModeChange,
+  onSeekSample,
 }: FilterTrackPreviewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
   const resizeSessionRef = useRef<TrackResizeSession | null>(null)
@@ -360,9 +492,43 @@ export function FilterTrackPreview({
   ))
   const [resizing, setResizing] = useState(false)
   const [viewMode, setViewMode] = useState<TrackViewMode>('waveform')
+  const [timeViewportState, setTimeViewportState] = useState<TrackTimeViewportState>(() => ({
+    viewport: createTrackTimeViewport(0, 0),
+    buffer: null,
+    viewMode: 'waveform',
+    spectrogram: null,
+  }))
   const size = useElementSize(hostRef)
   const laneWidth = Math.max(0, size.width - 20)
   const columns = Math.max(64, Math.min(1_200, Math.round(laneWidth - 156)))
+  const timeDomain = useMemo(
+    () => resolvePreviewTimeDomain(buffer, viewMode, spectrogram),
+    [buffer, spectrogram, viewMode],
+  )
+  const viewportRevisionMatches = timeViewportState.buffer === buffer
+    && timeViewportState.viewMode === viewMode
+    && timeViewportState.spectrogram === (viewMode === 'spectrogram' ? spectrogram : null)
+  const timeViewport = useMemo(() => (
+    viewportRevisionMatches
+      ? resolveTrackTimeViewport(timeViewportState.viewport, timeDomain[0], timeDomain[1])
+      : createTrackTimeViewport(timeDomain[0], timeDomain[1])
+  ), [timeDomain, timeViewportState.viewport, viewportRevisionMatches])
+  const setTimeViewport = useCallback((viewport: TrackTimeViewport) => {
+    setTimeViewportState({
+      viewport,
+      buffer,
+      viewMode,
+      spectrogram: viewMode === 'spectrogram' ? spectrogram : null,
+    })
+  }, [buffer, spectrogram, viewMode])
+  const timeViewportZoomed = timeViewport.startSample !== timeViewport.domainStartSample
+    || timeViewport.endSample !== timeViewport.domainEndSample
+  const sampleRate = buffer?.sampleRate ?? spectrogram?.sampleRate ?? 0
+  const minimumTimeSpanSamples = viewMode === 'spectrogram' && spectrogram && sampleRate > 0
+    ? Math.max(64, Math.round(
+        spectrogram.hopSize * 2 * (sampleRate / spectrogram.sampleRate),
+      ))
+    : 64
   const overview = useMemo(() => {
     const channels = buffer
       ? Array.from(
@@ -370,11 +536,11 @@ export function FilterTrackPreview({
           (_, channel) => buffer.getChannelData(channel),
         )
       : []
-    return buildTrackOverview(channels, columns)
-  }, [buffer, columns])
-  const progress = buffer && buffer.length > 0
-    ? Math.max(0, Math.min(1, currentSample / buffer.length))
-    : 0
+    const range = viewMode === 'waveform'
+      ? { start: timeViewport.startSample, end: timeViewport.endSample }
+      : { start: 0, end: buffer?.length ?? 0 }
+    return buildTrackOverviewRange(channels, columns, range)
+  }, [buffer, columns, timeViewport, viewMode])
   const activeFilters = filters.filter((filter) => filter.enabled)
   const filterSummary = activeFilters.length > 0
     ? activeFilters.slice(0, 3).map((filter) => FILTER_DEFINITIONS[filter.type].label).join(' → ')
@@ -389,29 +555,16 @@ export function FilterTrackPreview({
       ? getFilterFrequencyResponseDb(Float32Array.from(spectrogram.frequenciesHz))
       : null
   ), [filterResponseRevision, getFilterFrequencyResponseDb, spectrogram])
-  const spectrogramStartTime = spectrogram?.timesSeconds[0]
-  const spectrogramEndTime = spectrogram?.timesSeconds.at(-1)
-  const spectrogramProgress = spectrogram
-    && typeof spectrogramStartTime === 'number'
-    && typeof spectrogramEndTime === 'number'
-    && spectrogramEndTime > spectrogramStartTime
-    ? Math.max(0, Math.min(
-        1,
-        (currentSample / spectrogram.sampleRate - spectrogramStartTime)
-          / (spectrogramEndTime - spectrogramStartTime),
-      ))
-    : progress
-  const laneProgress = viewMode === 'spectrogram' ? spectrogramProgress : progress
   const previewIcon = viewMode === 'waveform'
     ? <AudioWaveform size={14} />
     : viewMode === 'spectrum'
       ? <Activity size={14} />
       : <ScanLine size={14} />
   const previewDescription = viewMode === 'waveform'
-    ? '共享源时间轮廓 · 实时监听路径独立'
+    ? '共享时间视口 · 点击定位 · 滚轮缩放'
     : viewMode === 'spectrum'
       ? '当前播放位置 · B 轨叠加实时节点响应'
-      : '时间—频率能量 · B 轨叠加节点响应'
+      : '共享分析时段 · 点击定位 · 滚轮缩放'
 
   useEffect(() => {
     const handleViewportResize = () => {
@@ -505,6 +658,13 @@ export function FilterTrackPreview({
             <button type="button" className={viewMode === 'spectrum' ? 'active' : ''} aria-pressed={viewMode === 'spectrum'} onClick={() => setViewMode('spectrum')}><Activity size={12} /> 频谱</button>
             <button type="button" className={viewMode === 'spectrogram' ? 'active' : ''} aria-pressed={viewMode === 'spectrogram'} onClick={() => setViewMode('spectrogram')}><ScanLine size={12} /> 二维声谱</button>
           </span>
+          <button
+            type="button"
+            className="mini-button audition-fit-button"
+            disabled={viewMode === 'spectrum' || !buffer || !timeViewportZoomed}
+            onClick={() => setTimeViewport(createTrackTimeViewport(timeDomain[0], timeDomain[1]))}
+            title="适应当前时间范围"
+          ><Maximize2 size={11} /> 适应范围</button>
           <span className="track-height-readout">
             <MoveVertical size={12} />
             <span>拖拽轨高</span>
@@ -526,7 +686,8 @@ export function FilterTrackPreview({
           color="#64a9ff"
           active={auditionMode === 'original'}
           playing={playing}
-          progress={laneProgress}
+          currentSample={currentSample}
+          sampleRate={sampleRate}
           durationSeconds={buffer?.duration ?? 0}
           overview={overview}
           width={laneWidth}
@@ -535,8 +696,12 @@ export function FilterTrackPreview({
           spectrum={spectrum}
           spectrogram={spectrogram}
           spectrogramResponseDb={null}
+          timeViewport={timeViewport}
+          minimumTimeSpanSamples={minimumTimeSpanSamples}
           getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
           onSelect={() => onAuditionModeChange('original')}
+          onSeekSample={onSeekSample}
+          onTimeViewportChange={setTimeViewport}
         />
         <TrackLane
           mode="filtered"
@@ -550,7 +715,8 @@ export function FilterTrackPreview({
           active={auditionMode === 'filtered'}
           disabled={filters.length === 0}
           playing={playing}
-          progress={laneProgress}
+          currentSample={currentSample}
+          sampleRate={sampleRate}
           durationSeconds={buffer?.duration ?? 0}
           overview={overview}
           width={laneWidth}
@@ -559,8 +725,12 @@ export function FilterTrackPreview({
           spectrum={spectrum}
           spectrogram={spectrogram}
           spectrogramResponseDb={spectrogramResponseDb}
+          timeViewport={timeViewport}
+          minimumTimeSpanSamples={minimumTimeSpanSamples}
           getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
           onSelect={() => onAuditionModeChange('filtered')}
+          onSeekSample={onSeekSample}
+          onTimeViewportChange={setTimeViewport}
         />
       </div>
     </div>

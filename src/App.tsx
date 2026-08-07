@@ -1440,6 +1440,7 @@ export function App() {
           getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
           onFiltersChange={handleFilterChainChange}
           onAuditionModeChange={handleFilterAuditionChange}
+          onSeekSample={seekSample}
           onVolumeChange={(volume) => ensureEngine().setVolume(volume)}
           onOutputChannelEnabledChange={(channelIndex, enabled) => ensureEngine().setOutputChannelEnabled(channelIndex, enabled)}
           onOutputBalanceChange={(balance) => ensureEngine().setOutputBalance(balance)}

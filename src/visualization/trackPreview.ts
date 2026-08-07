@@ -92,6 +92,121 @@ export interface TrackOverview {
   readonly maxs: Float32Array
 }
 
+export interface TrackTimeViewport {
+  readonly startSample: number
+  readonly endSample: number
+  readonly domainStartSample: number
+  readonly domainEndSample: number
+}
+
+export function createTrackTimeViewport(
+  domainStartSample: number,
+  domainEndSample: number,
+): TrackTimeViewport {
+  assertValidTrackTimeDomain(domainStartSample, domainEndSample)
+  return {
+    startSample: domainStartSample,
+    endSample: domainEndSample,
+    domainStartSample,
+    domainEndSample,
+  }
+}
+
+export function resolveTrackTimeViewport(
+  viewport: TrackTimeViewport,
+  domainStartSample: number,
+  domainEndSample: number,
+): TrackTimeViewport {
+  assertValidTrackTimeDomain(domainStartSample, domainEndSample)
+  if (
+    viewport.domainStartSample !== domainStartSample
+    || viewport.domainEndSample !== domainEndSample
+    || viewport.startSample < domainStartSample
+    || viewport.endSample > domainEndSample
+    || viewport.endSample <= viewport.startSample
+  ) {
+    return createTrackTimeViewport(domainStartSample, domainEndSample)
+  }
+  return viewport
+}
+
+export function zoomTrackTimeViewport(
+  viewport: TrackTimeViewport,
+  anchorSample: number,
+  wheelDeltaY: number,
+  minimumSpanSamples = 64,
+): TrackTimeViewport {
+  const domainSpan = viewport.domainEndSample - viewport.domainStartSample
+  if (
+    domainSpan <= 0
+    || !Number.isFinite(anchorSample)
+    || !Number.isFinite(wheelDeltaY)
+    || !Number.isSafeInteger(minimumSpanSamples)
+    || minimumSpanSamples <= 0
+  ) {
+    return viewport
+  }
+
+  const currentSpan = viewport.endSample - viewport.startSample
+  const nextSpan = Math.round(Math.min(
+    domainSpan,
+    Math.max(Math.min(minimumSpanSamples, domainSpan), currentSpan * Math.exp(wheelDeltaY * 0.0014)),
+  ))
+  const clampedAnchor = Math.min(viewport.endSample, Math.max(viewport.startSample, anchorSample))
+  const anchorPosition = currentSpan > 0
+    ? (clampedAnchor - viewport.startSample) / currentSpan
+    : 0
+  const unclampedStart = Math.round(clampedAnchor - anchorPosition * nextSpan)
+  const startSample = Math.min(
+    viewport.domainEndSample - nextSpan,
+    Math.max(viewport.domainStartSample, unclampedStart),
+  )
+  return {
+    ...viewport,
+    startSample,
+    endSample: startSample + nextSpan,
+  }
+}
+
+export function trackTimeViewportSampleAtPosition(
+  viewport: Pick<TrackTimeViewport, 'startSample' | 'endSample'>,
+  position: number,
+): number {
+  const clampedPosition = Number.isFinite(position)
+    ? Math.min(1, Math.max(0, position))
+    : 0
+  return Math.round(
+    viewport.startSample + clampedPosition * (viewport.endSample - viewport.startSample),
+  )
+}
+
+export function trackTimeViewportPositionForSample(
+  viewport: Pick<TrackTimeViewport, 'startSample' | 'endSample'>,
+  sample: number,
+): number | null {
+  const span = viewport.endSample - viewport.startSample
+  if (
+    !Number.isFinite(sample)
+    || span <= 0
+    || sample < viewport.startSample
+    || sample > viewport.endSample
+  ) {
+    return null
+  }
+  return (sample - viewport.startSample) / span
+}
+
+function assertValidTrackTimeDomain(startSample: number, endSample: number): void {
+  if (
+    !Number.isSafeInteger(startSample)
+    || !Number.isSafeInteger(endSample)
+    || startSample < 0
+    || endSample < startSample
+  ) {
+    throw new RangeError('Track time domain must be a non-negative safe sample range')
+  }
+}
+
 export type TrackPreviewAxisMode = 'waveform' | 'spectrum' | 'spectrogram'
 
 export interface TrackPreviewAxisTick {
@@ -137,6 +252,7 @@ export interface TrackPreviewAxisOptions {
   readonly mode: TrackPreviewAxisMode
   readonly durationSeconds: number
   readonly analysis: TrackPreviewAnalysisAxesSource | null
+  readonly timeRangeSeconds?: readonly [number, number]
   readonly horizontalTickCount?: number
   readonly verticalTickCount?: number
 }
@@ -150,6 +266,7 @@ export function buildTrackPreviewAxes({
   mode,
   durationSeconds,
   analysis,
+  timeRangeSeconds,
   horizontalTickCount = 5,
   verticalTickCount = 5,
 }: TrackPreviewAxisOptions): TrackPreviewAxes {
@@ -158,10 +275,15 @@ export function buildTrackPreviewAxes({
     : 0
 
   if (mode === 'waveform') {
+    const [startTime, endTime] = resolveRequestedTimeBounds(
+      timeRangeSeconds,
+      0,
+      safeDuration,
+    )
     return {
       horizontal: createLinearAxis(
-        0,
-        safeDuration,
+        startTime,
+        endTime,
         horizontalTickCount,
         (value, step) => formatSeconds(value, step),
         '时间',
@@ -203,7 +325,12 @@ export function buildTrackPreviewAxes({
     }
   }
 
-  const [startTime, endTime] = resolveAnalysisTimeBounds(analysis, safeDuration)
+  const [analysisStartTime, analysisEndTime] = resolveAnalysisTimeBounds(analysis, safeDuration)
+  const [startTime, endTime] = resolveRequestedTimeBounds(
+    timeRangeSeconds,
+    analysisStartTime,
+    analysisEndTime,
+  )
   return {
     horizontal: createLinearAxis(
       startTime,
@@ -220,6 +347,22 @@ export function buildTrackPreviewAxes({
       '频率',
     ),
   }
+}
+
+function resolveRequestedTimeBounds(
+  requested: readonly [number, number] | undefined,
+  fallbackStart: number,
+  fallbackEnd: number,
+): readonly [number, number] {
+  if (
+    requested
+    && Number.isFinite(requested[0])
+    && Number.isFinite(requested[1])
+    && requested[1] > requested[0]
+  ) {
+    return requested
+  }
+  return [fallbackStart, fallbackEnd]
 }
 
 function createLinearAxis(
@@ -349,6 +492,20 @@ export function buildTrackOverview(
   columns: number,
   samplesPerColumn = DEFAULT_SAMPLES_PER_COLUMN,
 ): TrackOverview {
+  return buildTrackOverviewRange(
+    channels,
+    columns,
+    { start: 0, end: minimumTrackSourceLength(channels) },
+    samplesPerColumn,
+  )
+}
+
+export function buildTrackOverviewRange(
+  channels: readonly Float32Array[],
+  columns: number,
+  range: { readonly start: number; readonly end: number },
+  samplesPerColumn = DEFAULT_SAMPLES_PER_COLUMN,
+): TrackOverview {
   if (!Number.isSafeInteger(columns) || columns <= 0 || columns > 4_096) {
     throw new RangeError('Track preview columns must be within [1, 4096]')
   }
@@ -359,17 +516,27 @@ export function buildTrackOverview(
   const mins = new Float32Array(columns)
   const maxs = new Float32Array(columns)
   const sourceChannels = channels.slice(0, MAX_PREVIEW_CHANNELS)
-  const length = sourceChannels.reduce(
-    (minimum, channel) => Math.min(minimum, channel.length),
-    Number.POSITIVE_INFINITY,
-  )
-  if (sourceChannels.length === 0 || !Number.isFinite(length) || length <= 0) {
+  const sourceLength = minimumTrackSourceLength(sourceChannels)
+  if (
+    !Number.isSafeInteger(range.start)
+    || !Number.isSafeInteger(range.end)
+    || range.start < 0
+    || range.end < range.start
+    || range.end > sourceLength
+  ) {
+    throw new RangeError('Track preview range must fit the available source samples')
+  }
+  const length = range.end - range.start
+  if (sourceChannels.length === 0 || sourceLength <= 0 || length <= 0) {
     return { mins, maxs }
   }
 
   for (let column = 0; column < columns; column += 1) {
-    const start = Math.floor((column / columns) * length)
-    const end = Math.max(start + 1, Math.floor(((column + 1) / columns) * length))
+    const start = range.start + Math.floor((column / columns) * length)
+    const end = Math.min(
+      range.end,
+      Math.max(start + 1, range.start + Math.floor(((column + 1) / columns) * length)),
+    )
     const span = Math.max(1, end - start)
     const sampleCount = Math.min(samplesPerColumn, span)
     let minimum = 1
@@ -377,7 +544,7 @@ export function buildTrackOverview(
 
     for (let sample = 0; sample < sampleCount; sample += 1) {
       const ratio = sampleCount <= 1 ? 0 : sample / (sampleCount - 1)
-      const index = Math.min(length - 1, start + Math.floor(ratio * (span - 1)))
+      const index = Math.min(range.end - 1, start + Math.floor(ratio * (span - 1)))
       for (const channel of sourceChannels) {
         const value = channel[index] ?? 0
         if (!Number.isFinite(value)) continue
@@ -391,4 +558,13 @@ export function buildTrackOverview(
   }
 
   return { mins, maxs }
+}
+
+function minimumTrackSourceLength(channels: readonly Float32Array[]): number {
+  const sourceChannels = channels.slice(0, MAX_PREVIEW_CHANNELS)
+  if (sourceChannels.length === 0) return 0
+  return sourceChannels.reduce(
+    (minimum, channel) => Math.min(minimum, channel.length),
+    Number.POSITIVE_INFINITY,
+  )
 }

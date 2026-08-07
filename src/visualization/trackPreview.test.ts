@@ -4,10 +4,16 @@ import {
   MIN_TRACK_LANE_HEIGHT,
   buildTrackPreviewAxes,
   buildTrackOverview,
+  buildTrackOverviewRange,
   buildTrackSpectrogramPixels,
+  createTrackTimeViewport,
   defaultTrackLaneHeight,
   maximumTrackLaneHeight,
+  resolveTrackTimeViewport,
   trackPreviewAxisValueToPosition,
+  trackTimeViewportPositionForSample,
+  trackTimeViewportSampleAtPosition,
+  zoomTrackTimeViewport,
 } from './trackPreview'
 
 describe('buildTrackOverview', () => {
@@ -26,6 +32,23 @@ describe('buildTrackOverview', () => {
     expect(Array.from(buildTrackOverview([], 3).maxs)).toEqual([0, 0, 0])
     expect(() => buildTrackOverview([new Float32Array(1)], 0)).toThrow(RangeError)
     expect(() => buildTrackOverview([new Float32Array(1)], 5_000)).toThrow(RangeError)
+  })
+
+  it('samples only the visible source range for a zoomed preview', () => {
+    const overview = buildTrackOverviewRange(
+      [Float32Array.from([-1, -0.5, 0.25, 0.75, -0.25, 1, 0.5, 0])],
+      2,
+      { start: 2, end: 6 },
+      8,
+    )
+
+    expect(Array.from(overview.mins)).toEqual([0.25, -0.25])
+    expect(Array.from(overview.maxs)).toEqual([0.75, 1])
+    expect(() => buildTrackOverviewRange(
+      [new Float32Array(4)],
+      2,
+      { start: 2, end: 5 },
+    )).toThrow(RangeError)
   })
 
   it('caps two lanes and preview chrome within 60% of the viewport', () => {
@@ -72,10 +95,11 @@ describe('buildTrackOverview', () => {
       mode: 'waveform',
       durationSeconds: 3,
       analysis: null,
+      timeRangeSeconds: [1, 2],
     })
-    expect(waveform.horizontal).toMatchObject({ minimum: 0, maximum: 3, scale: 'linear' })
+    expect(waveform.horizontal).toMatchObject({ minimum: 1, maximum: 2, scale: 'linear' })
     expect(waveform.horizontal.ticks.map((tick) => tick.label)).toEqual([
-      '0 s', '0.8 s', '1.5 s', '2.3 s', '3 s',
+      '1 s', '1.3 s', '1.5 s', '1.8 s', '2 s',
     ])
     expect(waveform.vertical.ticks.map((tick) => tick.label)).toEqual(['-1', '0', '+1'])
     expect(trackPreviewAxisValueToPosition(waveform.vertical, 0)).toBe(0.5)
@@ -104,5 +128,19 @@ describe('buildTrackOverview', () => {
     expect(spectrogram.vertical.ticks.map((tick) => tick.label)).toEqual([
       '0 Hz', '12 kHz', '24 kHz',
     ])
+  })
+
+  it('zooms a shared time viewport around the pointer and resets stale domains', () => {
+    const full = createTrackTimeViewport(0, 1_000)
+    const zoomed = zoomTrackTimeViewport(full, 250, -500, 64)
+
+    expect(zoomed.endSample - zoomed.startSample).toBeLessThan(1_000)
+    expect(trackTimeViewportPositionForSample(zoomed, 250)).toBeCloseTo(0.25, 2)
+    expect(trackTimeViewportSampleAtPosition(zoomed, 0.25)).toBeCloseTo(250, 0)
+    expect(trackTimeViewportPositionForSample(zoomed, 999)).toBeNull()
+    expect(zoomTrackTimeViewport(zoomed, 250, 10_000, 64)).toEqual(full)
+    expect(resolveTrackTimeViewport(zoomed, 200, 800)).toEqual(
+      createTrackTimeViewport(200, 800),
+    )
   })
 })
