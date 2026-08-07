@@ -11,6 +11,7 @@ import { useElementSize } from '../hooks/useElementSize'
 import { normalizeDb, spectrumColor } from '../visualization/colorMap'
 import {
   buildFft3DAxisTicks,
+  mapFrequencyUnitFromOrigin,
   type AxisTick,
   type Fft3DAxisTicks,
 } from '../visualization/fft3dAxes'
@@ -37,8 +38,8 @@ const QUALITY_SIZE: Record<Fft3DQuality, number> = {
 
 const TIME_AXIS_MIN = -5
 const TIME_AXIS_MAX = 5
-const FREQUENCY_AXIS_MIN = -3
-const FREQUENCY_AXIS_MAX = 3
+const FREQUENCY_AXIS_ORIGIN_Z = 3
+const FREQUENCY_AXIS_FAR_Z = -3
 const AMPLITUDE_AXIS_HEIGHT = 2.6
 const AXIS_X = 5.35
 const AXIS_Z = 3.35
@@ -91,7 +92,11 @@ function buildGeometryData(
       ))
       const db = result.valuesDbfs[frame * result.binCount + bin] ?? minDb
       const normalized = normalizeDb(db, minDb, maxDb)
-      const z = -3 + (column / (columns - 1)) * 6
+      const z = mapFrequencyUnitFromOrigin(
+        frequencyUnit,
+        FREQUENCY_AXIS_ORIGIN_Z,
+        FREQUENCY_AXIS_FAR_Z,
+      )
       positions[vertex * 3] = x
       positions[vertex * 3 + 1] = normalized * 2.6
       positions[vertex * 3 + 2] = z
@@ -210,11 +215,15 @@ function createAxisScaleGroup(ticks: Fft3DAxisTicks): THREE.Group {
   group.add(createAxisLines(timeLines, AXIS_COLORS.time))
 
   const frequencyLines: number[] = [
-    AXIS_X, 0, FREQUENCY_AXIS_MIN,
-    AXIS_X, 0, FREQUENCY_AXIS_MAX,
+    AXIS_X, 0, FREQUENCY_AXIS_ORIGIN_Z,
+    AXIS_X, 0, FREQUENCY_AXIS_FAR_Z,
   ]
   ticks.frequency.forEach((tick, index) => {
-    const z = FREQUENCY_AXIS_MIN + tick.unit * (FREQUENCY_AXIS_MAX - FREQUENCY_AXIS_MIN)
+    const z = mapFrequencyUnitFromOrigin(
+      tick.unit,
+      FREQUENCY_AXIS_ORIGIN_Z,
+      FREQUENCY_AXIS_FAR_Z,
+    )
     frequencyLines.push(AXIS_X - 0.1, 0, z, AXIS_X + 0.1, 0, z)
     group.add(createTickLabel(
       tick,

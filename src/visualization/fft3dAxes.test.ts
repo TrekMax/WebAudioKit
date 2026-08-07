@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { StftPreviewResult } from '../audio/analysis'
-import { buildFft3DAxisTicks } from './fft3dAxes'
+import {
+  buildFft3DAxisTicks,
+  mapFrequencyUnitFromOrigin,
+} from './fft3dAxes'
 
 function result(
   timesSeconds: readonly number[],
@@ -111,5 +114,16 @@ describe('buildFft3DAxisTicks', () => {
     const preview = result([0, 1])
     expect(() => buildFft3DAxisTicks(preview, 0, 0, 'linear')).toThrow(RangeError)
     expect(() => buildFft3DAxisTicks(preview, Number.NaN, 0, 'linear')).toThrow(RangeError)
+  })
+})
+
+describe('mapFrequencyUnitFromOrigin', () => {
+  it('places low frequency at the origin and moves higher frequencies toward the far endpoint', () => {
+    const units = [0, 0.25, 0.5, 0.75, 1]
+    const positions = units.map((unit) => mapFrequencyUnitFromOrigin(unit, 3, -3))
+
+    expect(positions).toEqual([3, 1.5, 0, -1.5, -3])
+    expect(positions.map((position) => Math.abs(position - positions[0]!)))
+      .toEqual([0, 1.5, 3, 4.5, 6])
   })
 })

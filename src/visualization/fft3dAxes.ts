@@ -22,6 +22,19 @@ interface NumericTick {
 }
 
 /**
+ * Projects a normalized frequency onto an axis that starts at the coordinate
+ * origin and extends toward its far endpoint. A larger frequency unit is
+ * therefore always farther from the origin, regardless of scene orientation.
+ */
+export function mapFrequencyUnitFromOrigin(
+  unit: number,
+  originPosition: number,
+  farPosition: number,
+): number {
+  return originPosition + unit * (farPosition - originPosition)
+}
+
+/**
  * Builds presentation-only 3D axis ticks from the exact STFT coordinate space.
  * The returned units are normalized so a renderer can map them onto any scene
  * dimensions without duplicating time, frequency, or dB transforms.
