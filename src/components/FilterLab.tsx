@@ -80,9 +80,9 @@ interface FilterLabProps {
 
 const FILTER_TYPES = Object.keys(FILTER_DEFINITIONS) as FilterKind[]
 const FLOATING_INSPECTOR_GAP = 12
-const FLOATING_INSPECTOR_WIDTH = 300
-const PALETTE_GUIDE_WIDTH = 340
-const PALETTE_GUIDE_HEIGHT = 430
+const FLOATING_INSPECTOR_WIDTH = 420
+const PALETTE_GUIDE_WIDTH = 420
+const PALETTE_GUIDE_HEIGHT = 460
 const DRAG_AUTO_SCROLL_EDGE_PX = 56
 const DRAG_AUTO_SCROLL_MAX_STEP_PX = 14
 
@@ -909,7 +909,7 @@ export function FilterLab({
           role="dialog"
           aria-modal="false"
           aria-label="节点参数悬浮面板"
-          className={`filter-inspector floating panel-surface ${selected?.type === 'equalizer' ? 'eq-expanded' : ''} ${selected && !draggingNodeId ? 'open' : ''}`}
+          className={`filter-inspector floating panel-surface ${selected && !draggingNodeId ? 'open' : ''}`}
           style={{ left: inspectorPosition.left, top: inspectorPosition.top }}
           onKeyDown={(event) => {
             if (event.key === 'Escape') setSelectedId(null)
