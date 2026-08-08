@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PeakLevel, WaveformPyramid } from '../audio/peaks'
 import { useElementSize } from '../hooks/useElementSize'
+import { useResolvedTheme } from '../hooks/useResolvedTheme'
+import type { ResolvedTheme } from '../theme'
 import type { SampleSelection } from '../workspaceTypes'
 import {
   WAVEFORM_AXIS_HEIGHT,
@@ -32,6 +34,58 @@ interface DragState {
 const LEFT_GUTTER = 46
 const RIGHT_GUTTER = 10
 const AXIS_HEIGHT = WAVEFORM_AXIS_HEIGHT
+
+interface WaveformCanvasPalette {
+  readonly axisBackground: string
+  readonly axisBorder: string
+  readonly axisText: string
+  readonly axisTick: string
+  readonly canvasBackground: string
+  readonly trackEven: string
+  readonly trackOdd: string
+  readonly centerLine: string
+  readonly channelLabel: string
+  readonly emptyText: string
+  readonly waveform: string
+  readonly selectionFill: string
+  readonly selectionBorder: string
+  readonly playhead: string
+}
+
+const WAVEFORM_CANVAS_PALETTES: Readonly<Record<ResolvedTheme, WaveformCanvasPalette>> = {
+  dark: {
+    axisBackground: '#090e15',
+    axisBorder: '#1d2937',
+    axisText: '#5f6e80',
+    axisTick: '#273544',
+    canvasBackground: '#080d14',
+    trackEven: '#0a1018',
+    trackOdd: '#090f16',
+    centerLine: 'rgba(113,137,159,0.18)',
+    channelLabel: '#566576',
+    emptyText: '#657386',
+    waveform: '#25d7ac',
+    selectionFill: 'rgba(255,179,92,0.11)',
+    selectionBorder: '#ffb35c',
+    playhead: '#eef6fa',
+  },
+  light: {
+    axisBackground: '#f2f7f8',
+    axisBorder: '#cad8dc',
+    axisText: '#5c727b',
+    axisTick: '#9fb3ba',
+    canvasBackground: '#f4f8f9',
+    trackEven: '#ffffff',
+    trackOdd: '#f1f6f7',
+    centerLine: 'rgba(74,101,111,0.2)',
+    channelLabel: '#526870',
+    emptyText: '#5f747c',
+    waveform: '#087e69',
+    selectionFill: 'rgba(185,107,23,0.14)',
+    selectionBorder: '#b96b17',
+    playhead: '#263e47',
+  },
+}
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value))
@@ -70,11 +124,12 @@ function drawTimeAxis(
   buffer: AudioBuffer | null,
   view: { start: number; end: number },
   plotWidth: number,
+  palette: WaveformCanvasPalette,
 ): void {
   context.clearRect(0, 0, width, AXIS_HEIGHT)
-  context.fillStyle = '#090e15'
+  context.fillStyle = palette.axisBackground
   context.fillRect(0, 0, width, AXIS_HEIGHT)
-  context.strokeStyle = '#1d2937'
+  context.strokeStyle = palette.axisBorder
   context.beginPath()
   context.moveTo(0, 0.5)
   context.lineTo(width, 0.5)
@@ -86,8 +141,8 @@ function drawTimeAxis(
   const startSeconds = view.start / buffer.sampleRate
   const endSeconds = view.end / buffer.sampleRate
   const firstTick = Math.ceil(startSeconds / step) * step
-  context.fillStyle = '#5f6e80'
-  context.strokeStyle = '#273544'
+  context.fillStyle = palette.axisText
+  context.strokeStyle = palette.axisTick
   context.font = '11px DM Mono, monospace'
   context.textAlign = 'center'
   for (let time = firstTick; time <= endSeconds + step * 0.01; time += step) {
@@ -113,6 +168,8 @@ export function WaveformCanvas({
   const scrollAreaRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const axisCanvasRef = useRef<HTMLCanvasElement>(null)
+  const theme = useResolvedTheme()
+  const palette = WAVEFORM_CANVAS_PALETTES[theme]
   const size = useElementSize(scrollAreaRef)
   const sourceLength = Math.max(1, buffer?.length ?? 1)
   const channelIndexes = useMemo(
@@ -182,7 +239,7 @@ export function WaveformCanvas({
     if (!context) return
     context.setTransform(dpr, 0, 0, dpr, 0, 0)
     context.clearRect(0, 0, size.width, trackCanvasHeight)
-    context.fillStyle = '#080d14'
+    context.fillStyle = palette.canvasBackground
     context.fillRect(0, 0, size.width, trackCanvasHeight)
 
     const plotHeight = trackCanvasHeight
@@ -194,14 +251,14 @@ export function WaveformCanvas({
       if (channelIndex === undefined) continue
       const top = trackIndex * channelHeight
       const center = top + channelHeight / 2
-      context.fillStyle = trackIndex % 2 ? '#090f16' : '#0a1018'
+      context.fillStyle = trackIndex % 2 ? palette.trackOdd : palette.trackEven
       context.fillRect(LEFT_GUTTER, top, plotWidth, channelHeight)
-      context.strokeStyle = 'rgba(113, 137, 159, 0.18)'
+      context.strokeStyle = palette.centerLine
       context.beginPath()
       context.moveTo(LEFT_GUTTER, center + 0.5)
       context.lineTo(LEFT_GUTTER + plotWidth, center + 0.5)
       context.stroke()
-      context.fillStyle = '#566576'
+      context.fillStyle = palette.channelLabel
       context.font = '11px DM Mono, monospace'
       context.textAlign = 'center'
       const label = buffer?.numberOfChannels === 1 ? 'MONO' : `CH ${channelIndex + 1}`
@@ -209,7 +266,7 @@ export function WaveformCanvas({
     }
 
     if (buffer && channelIndexes.length === 0) {
-      context.fillStyle = '#657386'
+      context.fillStyle = palette.emptyText
       context.font = '13px Inter, sans-serif'
       context.textAlign = 'center'
       context.fillText('请选择要显示的声道', LEFT_GUTTER + plotWidth / 2, plotHeight / 2)
@@ -218,7 +275,7 @@ export function WaveformCanvas({
       const level = choosePeakLevel(peaks, samplesPerPixel)
       if (level) {
         const scaleY = channelHeight * 0.43
-        context.strokeStyle = '#25d7ac'
+        context.strokeStyle = palette.waveform
         context.lineWidth = 1
         context.globalAlpha = 0.9
         for (let trackIndex = 0; trackIndex < channelIndexes.length; trackIndex += 1) {
@@ -248,12 +305,12 @@ export function WaveformCanvas({
         context.globalAlpha = 1
       }
     } else if (buffer) {
-      context.fillStyle = '#657386'
+      context.fillStyle = palette.emptyText
       context.font = '13px Inter, sans-serif'
       context.textAlign = 'center'
       context.fillText('正在构建多分辨率波形…', LEFT_GUTTER + plotWidth / 2, plotHeight / 2)
     } else {
-      context.fillStyle = '#657386'
+      context.fillStyle = palette.emptyText
       context.font = '13px Inter, sans-serif'
       context.textAlign = 'center'
       context.fillText('导入音频后显示波形', LEFT_GUTTER + plotWidth / 2, plotHeight / 2)
@@ -264,9 +321,9 @@ export function WaveformCanvas({
       const endX = LEFT_GUTTER + ((displaySelection.end - view.start) / (view.end - view.start)) * plotWidth
       const visibleStart = clamp(startX, LEFT_GUTTER, LEFT_GUTTER + plotWidth)
       const visibleEnd = clamp(endX, LEFT_GUTTER, LEFT_GUTTER + plotWidth)
-      context.fillStyle = 'rgba(255, 179, 92, 0.11)'
+      context.fillStyle = palette.selectionFill
       context.fillRect(visibleStart, 0, Math.max(0, visibleEnd - visibleStart), plotHeight)
-      context.strokeStyle = '#ffb35c'
+      context.strokeStyle = palette.selectionBorder
       context.lineWidth = 1
       for (const x of [startX, endX]) {
         if (x < LEFT_GUTTER || x > LEFT_GUTTER + plotWidth) continue
@@ -274,20 +331,20 @@ export function WaveformCanvas({
         context.moveTo(x + 0.5, 0)
         context.lineTo(x + 0.5, plotHeight)
         context.stroke()
-        context.fillStyle = '#ffb35c'
+        context.fillStyle = palette.selectionBorder
         context.fillRect(x - 2, 3, 5, 13)
       }
     }
 
     if (buffer && currentSample >= view.start && currentSample <= view.end) {
       const x = LEFT_GUTTER + ((currentSample - view.start) / (view.end - view.start)) * plotWidth
-      context.strokeStyle = '#eef6fa'
+      context.strokeStyle = palette.playhead
       context.lineWidth = 1
       context.beginPath()
       context.moveTo(x + 0.5, 0)
       context.lineTo(x + 0.5, plotHeight)
       context.stroke()
-      context.fillStyle = '#eef6fa'
+      context.fillStyle = palette.playhead
       context.beginPath()
       context.moveTo(x - 4, 0)
       context.lineTo(x + 5, 0)
@@ -304,9 +361,9 @@ export function WaveformCanvas({
       axisCanvas.style.width = `${size.width}px`
       axisCanvas.style.height = `${AXIS_HEIGHT}px`
       axisContext.setTransform(dpr, 0, 0, dpr, 0, 0)
-      drawTimeAxis(axisContext, size.width, buffer, view, plotWidth)
+      drawTimeAxis(axisContext, size.width, buffer, view, plotWidth, palette)
     }
-  }, [buffer, channelIndexes, currentSample, displaySelection, peaks, plotWidth, size, trackCanvasHeight, view])
+  }, [buffer, channelIndexes, currentSample, displaySelection, palette, peaks, plotWidth, size, trackCanvasHeight, view])
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!buffer || event.button !== 0) return

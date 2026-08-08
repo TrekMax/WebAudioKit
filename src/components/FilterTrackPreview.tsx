@@ -23,6 +23,8 @@ import {
   type FilterNodeConfig,
 } from '../audio/filterGraph'
 import { useElementSize } from '../hooks/useElementSize'
+import { useResolvedTheme } from '../hooks/useResolvedTheme'
+import type { ResolvedTheme } from '../theme'
 import {
   MIN_TRACK_LANE_HEIGHT,
   buildTrackPreviewAxes,
@@ -75,6 +77,7 @@ interface TrackLaneProps {
   readonly title: string
   readonly detail: string
   readonly color: string
+  readonly theme: ResolvedTheme
   readonly active: boolean
   readonly disabled?: boolean
   readonly playing: boolean
@@ -108,6 +111,55 @@ interface TrackPlotBounds {
   readonly top: number
   readonly width: number
   readonly height: number
+}
+
+interface TrackCanvasPalette {
+  readonly plotBackground: string
+  readonly activeGrid: string
+  readonly inactiveGrid: string
+  readonly activeText: string
+  readonly inactiveText: string
+  readonly activeBorder: string
+  readonly inactiveBorder: string
+  readonly activeUnit: string
+  readonly inactiveUnit: string
+  readonly disabledStroke: string
+  readonly activePlayhead: string
+  readonly inactivePlayhead: string
+  readonly emptyText: string
+}
+
+const TRACK_CANVAS_PALETTES: Readonly<Record<ResolvedTheme, TrackCanvasPalette>> = {
+  dark: {
+    plotBackground: 'rgba(5,10,16,0.58)',
+    activeGrid: 'rgba(31,223,178,0.14)',
+    inactiveGrid: 'rgba(92,112,132,0.14)',
+    activeText: '#81968f',
+    inactiveText: '#738393',
+    activeBorder: 'rgba(31,223,178,0.28)',
+    inactiveBorder: 'rgba(112,132,152,0.24)',
+    activeUnit: 'rgba(177,207,197,0.82)',
+    inactiveUnit: 'rgba(151,168,184,0.78)',
+    disabledStroke: '#4c5966',
+    activePlayhead: '#f4fbf8',
+    inactivePlayhead: 'rgba(210,222,232,0.38)',
+    emptyText: '#647586',
+  },
+  light: {
+    plotBackground: 'rgba(255,255,255,0.94)',
+    activeGrid: 'rgba(8,126,105,0.16)',
+    inactiveGrid: 'rgba(74,101,111,0.16)',
+    activeText: '#477268',
+    inactiveText: '#60747d',
+    activeBorder: 'rgba(8,126,105,0.34)',
+    inactiveBorder: 'rgba(91,116,126,0.3)',
+    activeUnit: '#426d63',
+    inactiveUnit: '#5e747d',
+    disabledStroke: '#9aabb2',
+    activePlayhead: '#087e69',
+    inactivePlayhead: 'rgba(55,80,89,0.46)',
+    emptyText: '#60747d',
+  },
 }
 
 function trackPlotPositionAtClientX(
@@ -163,13 +215,14 @@ function drawTrackAxes(
   bounds: TrackPlotBounds,
   canvasHeight: number,
   active: boolean,
+  palette: TrackCanvasPalette,
 ): void {
   const right = bounds.left + bounds.width
   const bottom = bounds.top + bounds.height
   context.save()
   context.lineWidth = 1
-  context.strokeStyle = active ? 'rgba(31,223,178,0.14)' : 'rgba(92,112,132,0.14)'
-  context.fillStyle = active ? '#81968f' : '#738393'
+  context.strokeStyle = active ? palette.activeGrid : palette.inactiveGrid
+  context.fillStyle = active ? palette.activeText : palette.inactiveText
   context.font = '9px ui-monospace, SFMono-Regular, Menlo, monospace'
 
   for (const [index, tick] of axes.horizontal.ticks.entries()) {
@@ -198,9 +251,9 @@ function drawTrackAxes(
     context.fillText(tick.label, bounds.left - 7, y)
   }
 
-  context.strokeStyle = active ? 'rgba(31,223,178,0.28)' : 'rgba(112,132,152,0.24)'
+  context.strokeStyle = active ? palette.activeBorder : palette.inactiveBorder
   context.strokeRect(bounds.left + 0.5, bounds.top + 0.5, bounds.width - 1, bounds.height - 1)
-  context.fillStyle = active ? 'rgba(177,207,197,0.82)' : 'rgba(151,168,184,0.78)'
+  context.fillStyle = active ? palette.activeUnit : palette.inactiveUnit
   context.font = '8px ui-monospace, SFMono-Regular, Menlo, monospace'
   context.textAlign = 'left'
   context.textBaseline = 'top'
@@ -213,6 +266,7 @@ function TrackLane({
   title,
   detail,
   color,
+  theme,
   active,
   disabled = false,
   playing,
@@ -234,6 +288,7 @@ function TrackLane({
   onTimeViewportChange,
 }: TrackLaneProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const palette = TRACK_CANVAS_PALETTES[theme]
   const timeMode = viewMode !== 'spectrum'
   const playheadPosition = timeMode
     ? trackTimeViewportPositionForSample(timeViewport, currentSample)
@@ -288,7 +343,9 @@ function TrackLane({
       horizontalTickCount: plotWidth < 320 ? 3 : 5,
       verticalTickCount: plotHeight < 54 ? 3 : 5,
     })
-    context.fillStyle = 'rgba(5,10,16,0.58)'
+    context.fillStyle = viewMode === 'spectrogram'
+      ? TRACK_CANVAS_PALETTES.dark.plotBackground
+      : palette.plotBackground
     context.fillRect(plotLeft, plotTop, plotWidth, plotHeight)
     if (viewMode === 'spectrogram' && spectrogramBitmap) {
       context.imageSmoothingEnabled = true
@@ -313,12 +370,19 @@ function TrackLane({
         plotHeight,
       )
     }
-    drawTrackAxes(context, axes, { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight }, height, active)
+    drawTrackAxes(
+      context,
+      axes,
+      { left: plotLeft, top: plotTop, width: plotWidth, height: plotHeight },
+      height,
+      active,
+      palette,
+    )
 
     if (viewMode === 'waveform') {
       const center = plotTop + plotHeight / 2
       const { mins, maxs } = overview
-      context.strokeStyle = disabled ? '#4c5966' : color
+      context.strokeStyle = disabled ? palette.disabledStroke : color
       context.globalAlpha = disabled ? 0.42 : active ? 0.95 : 0.62
       context.lineWidth = 1
       context.beginPath()
@@ -334,7 +398,7 @@ function TrackLane({
 
       if (playheadPosition !== null) {
         const cursorX = plotLeft + playheadPosition * plotWidth
-        context.strokeStyle = active ? '#f4fbf8' : 'rgba(210,222,232,0.38)'
+        context.strokeStyle = active ? palette.activePlayhead : palette.inactivePlayhead
         context.lineWidth = active ? 1.5 : 1
         context.beginPath()
         context.moveTo(cursorX, plotTop + 3)
@@ -383,7 +447,7 @@ function TrackLane({
         context.beginPath()
         context.moveTo(first[0], first[1])
         for (const point of points.slice(1)) context.lineTo(point[0], point[1])
-        context.strokeStyle = disabled ? '#4c5966' : color
+        context.strokeStyle = disabled ? palette.disabledStroke : color
         context.globalAlpha = disabled ? 0.42 : active ? 0.95 : 0.68
         context.lineWidth = active ? 1.5 : 1
         context.stroke()
@@ -391,7 +455,7 @@ function TrackLane({
       }
     } else if (viewMode === 'spectrogram') {
       if (!spectrogramBitmap) {
-        context.fillStyle = '#647586'
+        context.fillStyle = palette.emptyText
         context.font = '12px Inter, system-ui, sans-serif'
         context.textAlign = 'center'
         context.fillText('完成 FFT 分析后显示二维声谱', plotLeft + plotWidth / 2, plotTop + plotHeight / 2)
@@ -416,6 +480,7 @@ function TrackLane({
     height,
     mode,
     overview,
+    palette,
     playheadPosition,
     sampleRate,
     spectrum,
@@ -483,6 +548,7 @@ export function FilterTrackPreview({
   onSeekSample,
 }: FilterTrackPreviewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const theme = useResolvedTheme()
   const resizeSessionRef = useRef<TrackResizeSession | null>(null)
   const [trackHeight, setTrackHeight] = useState(() => defaultTrackLaneHeight(
     typeof window === 'undefined' ? 0 : window.innerHeight,
@@ -683,7 +749,8 @@ export function FilterTrackPreview({
             : viewMode === 'spectrum'
               ? spectrum ? spectrumRange : '等待频谱分析'
               : spectrogram ? `${spectrogram.frameCount} 帧 · 源 STFT` : '先执行 FFT 分析'}
-          color="#64a9ff"
+          color={theme === 'light' ? '#2f6fb6' : '#64a9ff'}
+          theme={theme}
           active={auditionMode === 'original'}
           playing={playing}
           currentSample={currentSample}
@@ -711,7 +778,8 @@ export function FilterTrackPreview({
             : viewMode === 'spectrum'
               ? spectrum ? `${spectrumRange} · 响应叠加` : '等待频谱分析'
               : spectrogram ? `${spectrogram.frameCount} 帧 · 响应叠加` : '先执行 FFT 分析'}
-          color="#1fdfb2"
+          color={theme === 'light' ? '#087e69' : '#1fdfb2'}
+          theme={theme}
           active={auditionMode === 'filtered'}
           disabled={filters.length === 0}
           playing={playing}

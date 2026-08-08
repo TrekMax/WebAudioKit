@@ -8,6 +8,7 @@ import {
   Upload,
   Waves,
 } from 'lucide-react'
+import { ThemeSwitcher } from './ThemeSwitcher'
 
 export type AppPage = 'analysis' | 'filters'
 
@@ -49,6 +50,7 @@ export function AppHeader({
         </span>
       </div>
       <div className="header-actions">
+        <ThemeSwitcher />
         <button className="secondary-button" onClick={onImport}><Upload size={15} /> 导入音频</button>
         <div className="export-menu">
           <button className="primary-button" disabled={!hasAudio || busy}><Download size={15} /> 导出 <ChevronDown size={13} /></button>

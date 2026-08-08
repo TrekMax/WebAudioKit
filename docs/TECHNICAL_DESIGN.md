@@ -85,6 +85,8 @@ TypeScript 最低要求：
 - **Infrastructure** 封装浏览器 API。上层通过端口接口访问，便于测试替换。
 - **Worker Runtime** 只接受版本化消息，不读取 React 状态，不直接操作 DOM、AudioContext 或 WebGL。
 
+界面主题是 Presentation 层的本机偏好，取值为 `light | dark | system`。启动渲染前读取 `localStorage` 并在根元素写入解析后的 `data-theme`，避免首屏主题闪烁；`system` 通过 `matchMedia('(prefers-color-scheme: dark)')` 解析并监听变化。主题偏好不得进入项目快照或音频状态，存储不可用时降级为仅当前会话生效。浅色主题切换应用框架、表单与节点编辑器的语义色，分析工作台波形和 A/B 试听声轨监听根主题变化并使用匹配的 Canvas 调色板重绘；频谱与声谱主绘图区保留高对比深色画布。
+
 ### 3.2 核心数据流
 
 ```text
