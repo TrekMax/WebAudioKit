@@ -29,6 +29,7 @@ import {
   MIN_TRACK_LANE_HEIGHT,
   buildTrackPreviewAxes,
   buildTrackOverviewRange,
+  buildTrackResamplerOverviewRange,
   buildTrackSpectrogramPixels,
   createTrackTimeViewport,
   defaultTrackLaneHeight,
@@ -51,6 +52,7 @@ interface FilterTrackPreviewProps {
   readonly playing: boolean
   readonly spectrum: StftPreviewResult | null
   readonly spectrogram: StftPreviewResult | null
+  readonly contextSampleRate: number
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
   readonly onAuditionModeChange: (mode: FilterAuditionMode) => void
   readonly onSeekSample: (sample: number) => void
@@ -105,6 +107,7 @@ const TRACK_PLOT_MARGIN = {
   bottom: 24,
   left: 176,
 } as const
+const TRACK_WAVEFORM_SAMPLES_PER_COLUMN = 8
 
 interface TrackPlotBounds {
   readonly left: number
@@ -207,6 +210,12 @@ function resolvePreviewTimeDomain(
     Math.min(sourceLength, Math.round(spectrogram.range.end * scale)),
   )
   return endSample > startSample ? [startSample, endSample] : [0, sourceLength]
+}
+
+function formatPreviewSampleRate(sampleRateHz: number): string {
+  return sampleRateHz >= 1_000
+    ? `${Number((sampleRateHz / 1_000).toFixed(2))} kHz`
+    : `${Math.round(sampleRateHz)} Hz`
 }
 
 function drawTrackAxes(
@@ -394,6 +403,23 @@ function TrackLane({
         context.lineTo(x, bottom)
       }
       context.stroke()
+
+      const samplesPerRenderedColumn = (
+        timeViewport.endSample - timeViewport.startSample
+      ) / Math.max(1, mins.length)
+      if (mins.length > 1 && samplesPerRenderedColumn <= 8) {
+        context.beginPath()
+        for (let column = 0; column < mins.length; column += 1) {
+          const x = plotLeft + (column / Math.max(1, mins.length - 1)) * plotWidth
+          const midpoint = ((mins[column] ?? 0) + (maxs[column] ?? 0)) / 2
+          const y = center - midpoint * (plotHeight / 2)
+          if (column === 0) context.moveTo(x, y)
+          else context.lineTo(x, y)
+        }
+        context.lineWidth = active ? 1.5 : 1
+        context.lineJoin = 'round'
+        context.stroke()
+      }
       context.globalAlpha = 1
 
       if (playheadPosition !== null) {
@@ -543,6 +569,7 @@ export function FilterTrackPreview({
   playing,
   spectrum,
   spectrogram,
+  contextSampleRate,
   getFilterFrequencyResponseDb,
   onAuditionModeChange,
   onSeekSample,
@@ -566,7 +593,11 @@ export function FilterTrackPreview({
   }))
   const size = useElementSize(hostRef)
   const laneWidth = Math.max(0, size.width - 20)
-  const columns = Math.max(64, Math.min(1_200, Math.round(laneWidth - 156)))
+  const visiblePlotWidth = Math.max(
+    1,
+    laneWidth - TRACK_PLOT_MARGIN.left - TRACK_PLOT_MARGIN.right,
+  )
+  const columns = Math.max(1, Math.min(1_200, Math.round(visiblePlotWidth)))
   const timeDomain = useMemo(
     () => resolvePreviewTimeDomain(buffer, viewMode, spectrogram),
     [buffer, spectrogram, viewMode],
@@ -595,22 +626,71 @@ export function FilterTrackPreview({
         spectrogram.hopSize * 2 * (sampleRate / spectrogram.sampleRate),
       ))
     : 64
-  const overview = useMemo(() => {
-    const channels = buffer
+  const activeFilters = filters.filter((filter) => filter.enabled)
+  const previewChannels = useMemo(() => (
+    buffer
       ? Array.from(
           { length: Math.min(2, buffer.numberOfChannels) },
           (_, channel) => buffer.getChannelData(channel),
         )
       : []
-    const range = viewMode === 'waveform'
-      ? { start: timeViewport.startSample, end: timeViewport.endSample }
-      : { start: 0, end: buffer?.length ?? 0 }
-    return buildTrackOverviewRange(channels, columns, range)
-  }, [buffer, columns, timeViewport, viewMode])
-  const activeFilters = filters.filter((filter) => filter.enabled)
+  ), [buffer])
+  const waveformResampler = useMemo(() => {
+    if (!buffer || contextSampleRate <= 0) return null
+    return filters.reduce<FilterNodeConfig | null>((selected, filter) => {
+      if (
+        !filter.enabled
+        || filter.type !== 'resampler'
+        || filter.targetSampleRateHz >= contextSampleRate
+      ) return selected
+      return !selected || filter.targetSampleRateHz <= selected.targetSampleRateHz
+        ? filter
+        : selected
+    }, null)
+  }, [buffer, contextSampleRate, filters])
+  const emptyOverview = useMemo(() => ({
+    mins: new Float32Array(columns),
+    maxs: new Float32Array(columns),
+  }), [columns])
+  const sourceOverview = useMemo(() => {
+    if (!buffer || viewMode !== 'waveform') return emptyOverview
+    return buildTrackOverviewRange(
+      previewChannels,
+      columns,
+      { start: timeViewport.startSample, end: timeViewport.endSample },
+      TRACK_WAVEFORM_SAMPLES_PER_COLUMN,
+    )
+  }, [buffer, columns, emptyOverview, previewChannels, timeViewport, viewMode])
+  const filteredOverview = useMemo(() => {
+    if (!buffer || viewMode !== 'waveform' || !waveformResampler) return sourceOverview
+    return buildTrackResamplerOverviewRange(
+      previewChannels,
+      columns,
+      { start: timeViewport.startSample, end: timeViewport.endSample },
+      {
+        sourceSampleRateHz: buffer.sampleRate,
+        contextSampleRateHz: contextSampleRate,
+        targetSampleRateHz: waveformResampler.targetSampleRateHz,
+        algorithm: waveformResampler.resamplingAlgorithm,
+      },
+      TRACK_WAVEFORM_SAMPLES_PER_COLUMN,
+    )
+  }, [
+    buffer,
+    columns,
+    contextSampleRate,
+    previewChannels,
+    sourceOverview,
+    timeViewport,
+    viewMode,
+    waveformResampler,
+  ])
   const filterSummary = activeFilters.length > 0
     ? activeFilters.slice(0, 3).map((filter) => FILTER_DEFINITIONS[filter.type].label).join(' → ')
     : '没有活动处理节点'
+  const waveformFilterSummary = waveformResampler
+    ? `采样器时域预览 · ${formatPreviewSampleRate(waveformResampler.targetSampleRateHz)} · ${waveformResampler.resamplingAlgorithm === 'linear' ? '线性平滑' : '复古保持'}`
+    : filterSummary
   const maximumFrequencyHz = spectrum?.frequenciesHz.at(-1) ?? 0
   const spectrumRange = maximumFrequencyHz >= 1_000
     ? `20 Hz–${Number((maximumFrequencyHz / 1_000).toFixed(1))} kHz`
@@ -627,7 +707,7 @@ export function FilterTrackPreview({
       ? <Activity size={14} />
       : <ScanLine size={14} />
   const previewDescription = viewMode === 'waveform'
-    ? '共享时间视口 · 点击定位 · 滚轮缩放'
+    ? '仅计算可视时间范围 · B 轨模拟采样器时域结果'
     : viewMode === 'spectrum'
       ? '当前播放位置 · B 轨叠加实时节点响应'
       : '共享分析时段 · 点击定位 · 滚轮缩放'
@@ -756,7 +836,7 @@ export function FilterTrackPreview({
           currentSample={currentSample}
           sampleRate={sampleRate}
           durationSeconds={buffer?.duration ?? 0}
-          overview={overview}
+          overview={sourceOverview}
           width={laneWidth}
           height={trackHeight}
           viewMode={viewMode}
@@ -774,19 +854,19 @@ export function FilterTrackPreview({
           mode="filtered"
           title="处理结果"
           detail={viewMode === 'waveform'
-            ? filterSummary
+            ? waveformFilterSummary
             : viewMode === 'spectrum'
               ? spectrum ? `${spectrumRange} · 响应叠加` : '等待频谱分析'
               : spectrogram ? `${spectrogram.frameCount} 帧 · 响应叠加` : '先执行 FFT 分析'}
           color={theme === 'light' ? '#087e69' : '#1fdfb2'}
           theme={theme}
           active={auditionMode === 'filtered'}
-          disabled={filters.length === 0}
+          disabled={activeFilters.length === 0}
           playing={playing}
           currentSample={currentSample}
           sampleRate={sampleRate}
           durationSeconds={buffer?.duration ?? 0}
-          overview={overview}
+          overview={filteredOverview}
           width={laneWidth}
           height={trackHeight}
           viewMode={viewMode}

@@ -282,6 +282,7 @@ export function App() {
   const [appPage, setAppPage] = useState<AppPage>('analysis')
   const [filterChain, setFilterChain] = useState<readonly FilterNodeConfig[]>([])
   const [filterAuditionMode, setFilterAuditionMode] = useState<FilterAuditionMode>('original')
+  const [audioContextSampleRate, setAudioContextSampleRate] = useState<number | null>(null)
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('spectrum')
   const [mode3d, setMode3d] = useState<Fft3DMode>('surface')
   const [quality3d, setQuality3d] = useState<Fft3DQuality>('medium')
@@ -312,6 +313,7 @@ export function App() {
       engine.setFilterChain(filterChainRef.current)
       engine.setFilterAudition(filterAuditionRef.current)
       engineRef.current = engine
+      setAudioContextSampleRate(engine.audioContext.sampleRate)
       unsubscribeEngineRef.current = engine.subscribe(setPlayback)
       setPlayback(engine.snapshot())
     }
@@ -1430,6 +1432,7 @@ export function App() {
           currentSample={playback.positionSample}
           playing={playback.kind === 'playing'}
           sampleRate={activeAsset?.buffer.sampleRate ?? null}
+          outputSampleRate={audioContextSampleRate ?? activeAsset?.buffer.sampleRate ?? null}
           spectrum={realtimeResult ?? realtimeChannelResults[0]?.preview ?? null}
           spectrogram={activeAsset?.analysis ?? null}
           volume={playback.volume}

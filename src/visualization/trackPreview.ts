@@ -1,4 +1,5 @@
 import type { StftPreviewResult } from '../audio/analysis'
+import type { ResamplingAlgorithm } from '../audio/filterGraph'
 import { normalizeDb, spectrumColor } from './colorMap'
 
 const MAX_PREVIEW_CHANNELS = 2
@@ -8,6 +9,7 @@ const TRACK_PREVIEW_VIEWPORT_RATIO = 0.6
 const TRACK_PREVIEW_CHROME_HEIGHT = 72
 const MAX_TRACK_SPECTROGRAM_WIDTH = 1_024
 const MAX_TRACK_SPECTROGRAM_HEIGHT = 384
+const MAX_RESAMPLER_PREVIEW_WARMUP_SAMPLES = 64
 
 export const MIN_TRACK_LANE_HEIGHT = 56
 
@@ -90,6 +92,13 @@ export function buildTrackSpectrogramPixels(
 export interface TrackOverview {
   readonly mins: Float32Array
   readonly maxs: Float32Array
+}
+
+export interface TrackResamplerPreviewConfig {
+  readonly sourceSampleRateHz: number
+  readonly contextSampleRateHz: number
+  readonly targetSampleRateHz: number
+  readonly algorithm: ResamplingAlgorithm
 }
 
 export interface TrackTimeViewport {
@@ -506,17 +515,133 @@ export function buildTrackOverviewRange(
   range: { readonly start: number; readonly end: number },
   samplesPerColumn = DEFAULT_SAMPLES_PER_COLUMN,
 ): TrackOverview {
+  const sourceChannels = channels.slice(0, MAX_PREVIEW_CHANNELS)
+  validateTrackOverviewRequest(sourceChannels, columns, range, samplesPerColumn)
+  return buildTrackOverviewFromAccessor(
+    sourceChannels.length,
+    columns,
+    range,
+    samplesPerColumn,
+    (channelIndex, sampleIndex) => finiteSample(sourceChannels[channelIndex]?.[sampleIndex]),
+  )
+}
+
+/**
+ * Builds a bounded, visible-range-only approximation of the realtime sampler.
+ * It follows the Worklet phase/hold rules and uses a short causal warm-up for
+ * the one-pole anti-alias filter instead of scanning PCM from the file start.
+ */
+export function buildTrackResamplerOverviewRange(
+  channels: readonly Float32Array[],
+  columns: number,
+  range: { readonly start: number; readonly end: number },
+  config: TrackResamplerPreviewConfig,
+  samplesPerColumn = DEFAULT_SAMPLES_PER_COLUMN,
+): TrackOverview {
+  if (
+    !Number.isFinite(config.sourceSampleRateHz)
+    || config.sourceSampleRateHz <= 0
+    || !Number.isFinite(config.contextSampleRateHz)
+    || config.contextSampleRateHz <= 0
+    || !Number.isFinite(config.targetSampleRateHz)
+    || config.targetSampleRateHz <= 0
+  ) {
+    throw new RangeError('Track resampler preview sample rates must be positive and finite')
+  }
+  if (config.algorithm !== 'hold' && config.algorithm !== 'linear') {
+    throw new RangeError(`Unsupported track resampler preview algorithm: ${String(config.algorithm)}`)
+  }
+  if (config.targetSampleRateHz >= config.contextSampleRateHz) {
+    return buildTrackOverviewRange(channels, columns, range, samplesPerColumn)
+  }
+
+  const sourceChannels = channels.slice(0, MAX_PREVIEW_CHANNELS)
+  validateTrackOverviewRequest(sourceChannels, columns, range, samplesPerColumn)
+  const ratio = config.targetSampleRateHz / config.contextSampleRateHz
+  const cutoffHz = Math.min(
+    config.contextSampleRateHz * 0.45,
+    config.targetSampleRateHz * 0.45,
+  )
+  const lowpassAlpha = 1 - Math.exp(
+    (-2 * Math.PI * cutoffHz) / config.contextSampleRateHz,
+  )
+  const feedback = 1 - lowpassAlpha
+  const settlingSamples = feedback > 0
+    ? Math.min(
+        MAX_RESAMPLER_PREVIEW_WARMUP_SAMPLES,
+        Math.max(1, Math.ceil(Math.log(1e-4) / Math.log(feedback))),
+      )
+    : 1
+  const filteredCaches = sourceChannels.map(() => new Map<number, number>())
+
+  const sourceSampleAtContextFrame = (channelIndex: number, contextFrame: number): number => {
+    const channel = sourceChannels[channelIndex]
+    if (!channel || channel.length === 0) return 0
+    const sourcePosition = contextFrame * config.sourceSampleRateHz / config.contextSampleRateHz
+    const lowerIndex = Math.min(channel.length - 1, Math.max(0, Math.floor(sourcePosition)))
+    const upperIndex = Math.min(channel.length - 1, lowerIndex + 1)
+    const fraction = Math.min(1, Math.max(0, sourcePosition - lowerIndex))
+    const lower = finiteSample(channel[lowerIndex])
+    return lower + (finiteSample(channel[upperIndex]) - lower) * fraction
+  }
+
+  const filteredSampleAt = (channelIndex: number, contextFrame: number): number => {
+    const cache = filteredCaches[channelIndex]
+    const cached = cache?.get(contextFrame)
+    if (cached !== undefined) return cached
+    const clampedFrame = Math.max(0, contextFrame)
+    const warmupStart = Math.max(0, clampedFrame - settlingSamples)
+    let filtered = warmupStart === 0
+      ? 0
+      : sourceSampleAtContextFrame(channelIndex, warmupStart)
+    const firstFilteredIndex = warmupStart === 0 ? 0 : warmupStart + 1
+    for (let frame = firstFilteredIndex; frame <= clampedFrame; frame += 1) {
+      filtered += lowpassAlpha * (
+        sourceSampleAtContextFrame(channelIndex, frame) - filtered
+      )
+    }
+    cache?.set(contextFrame, filtered)
+    return filtered
+  }
+
+  const eventSampleIndex = (step: number): number => (
+    step <= 0 ? 0 : Math.max(0, Math.ceil(step / ratio) - 1)
+  )
+  const sampleAt = (channelIndex: number, sampleIndex: number): number => {
+    const contextFrame = Math.round(
+      sampleIndex * config.contextSampleRateHz / config.sourceSampleRateHz,
+    )
+    const phasePosition = (contextFrame + 1) * ratio
+    const currentStep = Math.floor(phasePosition)
+    const current = filteredSampleAt(channelIndex, eventSampleIndex(currentStep))
+    if (config.algorithm === 'hold') return current
+    const previous = filteredSampleAt(channelIndex, eventSampleIndex(currentStep - 1))
+    const phase = phasePosition - currentStep
+    return previous + (current - previous) * phase
+  }
+
+  return buildTrackOverviewFromAccessor(
+    sourceChannels.length,
+    columns,
+    range,
+    samplesPerColumn,
+    sampleAt,
+  )
+}
+
+function validateTrackOverviewRequest(
+  channels: readonly Float32Array[],
+  columns: number,
+  range: { readonly start: number; readonly end: number },
+  samplesPerColumn: number,
+): void {
   if (!Number.isSafeInteger(columns) || columns <= 0 || columns > 4_096) {
     throw new RangeError('Track preview columns must be within [1, 4096]')
   }
   if (!Number.isSafeInteger(samplesPerColumn) || samplesPerColumn <= 0 || samplesPerColumn > 256) {
     throw new RangeError('Track preview samples per column must be within [1, 256]')
   }
-
-  const mins = new Float32Array(columns)
-  const maxs = new Float32Array(columns)
-  const sourceChannels = channels.slice(0, MAX_PREVIEW_CHANNELS)
-  const sourceLength = minimumTrackSourceLength(sourceChannels)
+  const sourceLength = minimumTrackSourceLength(channels)
   if (
     !Number.isSafeInteger(range.start)
     || !Number.isSafeInteger(range.end)
@@ -526,10 +651,19 @@ export function buildTrackOverviewRange(
   ) {
     throw new RangeError('Track preview range must fit the available source samples')
   }
+}
+
+function buildTrackOverviewFromAccessor(
+  channelCount: number,
+  columns: number,
+  range: { readonly start: number; readonly end: number },
+  samplesPerColumn: number,
+  sampleAt: (channelIndex: number, sampleIndex: number) => number,
+): TrackOverview {
+  const mins = new Float32Array(columns)
+  const maxs = new Float32Array(columns)
   const length = range.end - range.start
-  if (sourceChannels.length === 0 || sourceLength <= 0 || length <= 0) {
-    return { mins, maxs }
-  }
+  if (channelCount <= 0 || length <= 0) return { mins, maxs }
 
   for (let column = 0; column < columns; column += 1) {
     const start = range.start + Math.floor((column / columns) * length)
@@ -543,10 +677,10 @@ export function buildTrackOverviewRange(
     let maximum = -1
 
     for (let sample = 0; sample < sampleCount; sample += 1) {
-      const ratio = sampleCount <= 1 ? 0 : sample / (sampleCount - 1)
-      const index = Math.min(range.end - 1, start + Math.floor(ratio * (span - 1)))
-      for (const channel of sourceChannels) {
-        const value = channel[index] ?? 0
+      const sampleRatio = sampleCount <= 1 ? 0 : sample / (sampleCount - 1)
+      const index = Math.min(range.end - 1, start + Math.floor(sampleRatio * (span - 1)))
+      for (let channelIndex = 0; channelIndex < channelCount; channelIndex += 1) {
+        const value = sampleAt(channelIndex, index)
         if (!Number.isFinite(value)) continue
         minimum = Math.min(minimum, value)
         maximum = Math.max(maximum, value)
@@ -556,8 +690,11 @@ export function buildTrackOverviewRange(
     mins[column] = minimum <= maximum ? minimum : 0
     maxs[column] = minimum <= maximum ? maximum : 0
   }
-
   return { mins, maxs }
+}
+
+function finiteSample(value: number | undefined): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
 }
 
 function minimumTrackSourceLength(channels: readonly Float32Array[]): number {

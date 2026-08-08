@@ -5,6 +5,7 @@ import {
   buildTrackPreviewAxes,
   buildTrackOverview,
   buildTrackOverviewRange,
+  buildTrackResamplerOverviewRange,
   buildTrackSpectrogramPixels,
   createTrackTimeViewport,
   defaultTrackLaneHeight,
@@ -49,6 +50,127 @@ describe('buildTrackOverview', () => {
       2,
       { start: 2, end: 5 },
     )).toThrow(RangeError)
+  })
+
+  it('shows the sampler effect in the filtered visible-range waveform', () => {
+    const alternating = Float32Array.from(
+      { length: 32 },
+      (_, index) => index % 2 === 0 ? 1 : -1,
+    )
+    const source = buildTrackOverviewRange(
+      [alternating],
+      16,
+      { start: 0, end: 16 },
+      1,
+    )
+    const held = buildTrackResamplerOverviewRange(
+      [alternating],
+      16,
+      { start: 0, end: 16 },
+      {
+        sourceSampleRateHz: 16_000,
+        contextSampleRateHz: 16_000,
+        targetSampleRateHz: 4_000,
+        algorithm: 'hold',
+      },
+      1,
+    )
+
+    expect(held.maxs).not.toEqual(source.maxs)
+    expect(Math.max(...held.maxs.map(Math.abs))).toBeLessThan(1)
+    expect(Math.max(...held.mins.map(Math.abs))).toBeLessThan(1)
+  })
+
+  it('renders a smoother linear sampler preview with bounded visible input', () => {
+    const ramp = Float32Array.from({ length: 64 }, (_, index) => index / 63)
+    const held = buildTrackResamplerOverviewRange(
+      [ramp],
+      16,
+      { start: 0, end: 16 },
+      {
+        sourceSampleRateHz: 16_000,
+        contextSampleRateHz: 16_000,
+        targetSampleRateHz: 4_000,
+        algorithm: 'hold',
+      },
+      1,
+    )
+    const linear = buildTrackResamplerOverviewRange(
+      [ramp],
+      16,
+      { start: 0, end: 16 },
+      {
+        sourceSampleRateHz: 16_000,
+        contextSampleRateHz: 16_000,
+        targetSampleRateHz: 4_000,
+        algorithm: 'linear',
+      },
+      1,
+    )
+    const maximumStep = (values: Float32Array) => Array.from(
+      { length: values.length - 1 },
+      (_, index) => Math.abs((values[index + 1] ?? 0) - (values[index] ?? 0)),
+    ).reduce((maximum, step) => Math.max(maximum, step), 0)
+
+    expect(linear.maxs).not.toEqual(held.maxs)
+    expect(maximumStep(linear.maxs)).toBeLessThan(maximumStep(held.maxs))
+
+    const visibleOnly = buildTrackResamplerOverviewRange(
+      [Float32Array.from({ length: 64 }, (_, index) => index < 16 ? 0.1 : 1)],
+      8,
+      { start: 0, end: 16 },
+      {
+        sourceSampleRateHz: 16_000,
+        contextSampleRateHz: 16_000,
+        targetSampleRateHz: 4_000,
+        algorithm: 'hold',
+      },
+      4,
+    )
+    expect(Math.max(...visibleOnly.maxs)).toBeLessThanOrEqual(0.100_001)
+  })
+
+  it('keeps transparent sampler previews identical and rejects invalid algorithms', () => {
+    const channels = [Float32Array.from([0, 0.25, -0.5, 1])]
+    const source = buildTrackOverviewRange(channels, 4, { start: 0, end: 4 }, 1)
+    const transparent = buildTrackResamplerOverviewRange(
+      channels,
+      4,
+      { start: 0, end: 4 },
+      {
+        sourceSampleRateHz: 48_000,
+        contextSampleRateHz: 48_000,
+        targetSampleRateHz: 96_000,
+        algorithm: 'hold',
+      },
+      1,
+    )
+
+    expect(transparent).toEqual(source)
+    const contextConverted = buildTrackResamplerOverviewRange(
+      channels,
+      4,
+      { start: 0, end: 4 },
+      {
+        sourceSampleRateHz: 8_000,
+        contextSampleRateHz: 48_000,
+        targetSampleRateHz: 8_000,
+        algorithm: 'hold',
+      },
+      1,
+    )
+    expect(contextConverted).not.toEqual(source)
+    expect(() => buildTrackResamplerOverviewRange(
+      channels,
+      4,
+      { start: 0, end: 4 },
+      {
+        sourceSampleRateHz: 48_000,
+        contextSampleRateHz: 48_000,
+        targetSampleRateHz: 8_000,
+        algorithm: 'cubic' as never,
+      },
+    )).toThrow('algorithm')
   })
 
   it('caps two lanes and preview chrome within 60% of the viewport', () => {

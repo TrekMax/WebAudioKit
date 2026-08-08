@@ -59,6 +59,7 @@ interface FilterLabProps {
   readonly currentSample: number
   readonly playing: boolean
   readonly sampleRate: number | null
+  readonly outputSampleRate: number | null
   readonly spectrum: StftPreviewResult | null
   readonly spectrogram: StftPreviewResult | null
   readonly volume: number
@@ -172,6 +173,7 @@ export function FilterLab({
   currentSample,
   playing,
   sampleRate,
+  outputSampleRate,
   spectrum,
   spectrogram,
   volume,
@@ -247,7 +249,7 @@ export function FilterLab({
   const maximumFrequency = Math.min(96_000, Math.max(20, nyquist))
   const selectedPreset = getFilterPresetDefinition(selectedPresetId)
   const presetFitsNodeLimit = filters.length + selectedPreset.nodes.length <= MAX_FILTER_NODES
-  const referenceSampleRate = sampleRate ?? 48_000
+  const referenceSampleRate = outputSampleRate ?? sampleRate ?? 48_000
   const resamplingMode = selected?.type === 'resampler'
     ? selected.targetSampleRateHz < referenceSampleRate
       ? '下采样'
@@ -977,6 +979,7 @@ export function FilterLab({
             playing={playing}
             spectrum={spectrum}
             spectrogram={spectrogram}
+            contextSampleRate={referenceSampleRate}
             getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
             onAuditionModeChange={onAuditionModeChange}
             onSeekSample={onSeekSample}
