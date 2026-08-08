@@ -41,8 +41,8 @@ export function AppHeader({
       </div>
       <div className="header-center">
         <nav className="workspace-navigation" aria-label="工作页面">
-          <button type="button" className={activePage === 'analysis' ? 'active' : ''} aria-current={activePage === 'analysis' ? 'page' : undefined} onClick={() => onPageChange('analysis')}><Waves size={13} /> 分析工作台</button>
-          <button type="button" className={activePage === 'filters' ? 'active' : ''} aria-current={activePage === 'filters' ? 'page' : undefined} onClick={() => onPageChange('filters')}><SlidersHorizontal size={13} /> 滤波选项</button>
+          <button type="button" className={activePage === 'analysis' ? 'active' : ''} aria-current={activePage === 'analysis' ? 'page' : undefined} onClick={() => onPageChange('analysis')}><Waves size={15} /> 分析工作台</button>
+          <button type="button" className={activePage === 'filters' ? 'active' : ''} aria-current={activePage === 'filters' ? 'page' : undefined} onClick={() => onPageChange('filters')}><SlidersHorizontal size={15} /> 音效节点编辑器</button>
         </nav>
         <span className="header-runtime-status">
           <span className="local-badge"><ShieldCheck size={13} /> 本地处理</span>
