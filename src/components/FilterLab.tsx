@@ -26,6 +26,12 @@ import {
   type FilterKind,
   type FilterNodeConfig,
 } from '../audio/filterGraph'
+import {
+  FILTER_PRESETS,
+  createFilterPresetNodes,
+  getFilterPresetDefinition,
+  type FilterPresetId,
+} from '../audio/filterPresets'
 import type { StftPreviewResult } from '../audio/analysis'
 import { formatTime } from '../visualization/format'
 import { FilterTrackPreview } from './FilterTrackPreview'
@@ -177,6 +183,7 @@ export function FilterLab({
   const [dragPreviewOrder, setDragPreviewOrder] = useState<readonly string[] | null>(null)
   const [dragAnnouncement, setDragAnnouncement] = useState('')
   const [paletteGuide, setPaletteGuide] = useState<PaletteGuideState | null>(null)
+  const [selectedPresetId, setSelectedPresetId] = useState<FilterPresetId>(FILTER_PRESETS[0].id)
   const [inspectorPosition, setInspectorPosition] = useState<FloatingInspectorPosition>({
     left: FLOATING_INSPECTOR_GAP,
     top: 70,
@@ -212,6 +219,8 @@ export function FilterLab({
   const activeCount = filters.filter((filter) => filter.enabled).length
   const nyquist = sampleRate ? sampleRate / 2 : 24_000
   const maximumFrequency = Math.min(96_000, Math.max(20, nyquist))
+  const selectedPreset = getFilterPresetDefinition(selectedPresetId)
+  const presetFitsNodeLimit = filters.length + selectedPreset.nodes.length <= MAX_FILTER_NODES
   const referenceSampleRate = sampleRate ?? 48_000
   const resamplingMode = selected?.type === 'resampler'
     ? selected.targetSampleRateHz < referenceSampleRate
@@ -626,6 +635,19 @@ export function FilterLab({
     setSelectedId(id)
   }
 
+  const addSelectedPreset = () => {
+    if (!presetFitsNodeLimit) return
+    const created = createFilterPresetNodes(selectedPresetId, createFilterId).map((filter) => ({
+      ...filter,
+      frequencyHz: Math.min(filter.frequencyHz, maximumFrequency),
+    }))
+    onFiltersChange([...filters, ...created])
+    setPaletteGuide(null)
+    setInputInfoOpen(false)
+    setOutputControlsOpen(false)
+    setSelectedId(created.at(-1)?.id ?? null)
+  }
+
   const updateSelected = (patch: Partial<Omit<FilterNodeConfig, 'id'>>) => {
     if (!selected) return
     onFiltersChange(filters.map((filter) => filter.id === selected.id
@@ -733,6 +755,35 @@ export function FilterLab({
               )
             })}
           </div>
+          <section className="filter-preset-panel" aria-labelledby="filter-preset-heading">
+            <div className="filter-preset-heading">
+              <span>
+                <span className="eyebrow">QUICK PRESETS</span>
+                <strong id="filter-preset-heading">常用预设</strong>
+              </span>
+              <small>{selectedPreset.nodes.length} 个节点</small>
+            </div>
+            <div className="filter-preset-actions">
+              <select
+                aria-label="选择常用滤波预设"
+                value={selectedPresetId}
+                onChange={(event) => setSelectedPresetId(event.target.value as FilterPresetId)}
+              >
+                {FILTER_PRESETS.map((preset) => (
+                  <option key={preset.id} value={preset.id}>{preset.label}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!presetFitsNodeLimit}
+                title={presetFitsNodeLimit
+                  ? `追加“${selectedPreset.label}”到当前链路`
+                  : `至少需要 ${selectedPreset.nodes.length} 个空余节点位置`}
+                onClick={addSelectedPreset}
+              >追加</button>
+            </div>
+            <p>{selectedPreset.description}</p>
+          </section>
           <p className="filter-pane-note">悬停或聚焦节点可查看说明与前后图例。最多 {MAX_FILTER_NODES} 个节点，信号按画布顺序处理。</p>
         </aside>
 
