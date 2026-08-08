@@ -2,8 +2,10 @@ export const MAX_FILTER_NODES = 16
 export const EQ_GAIN_MIN_DB = -24
 export const EQ_GAIN_MAX_DB = 24
 export const EQ_BAND_COUNTS = [7, 10, 15] as const
+export const RESAMPLING_ALGORITHMS = ['hold', 'linear'] as const
 
 export type EqBandCount = typeof EQ_BAND_COUNTS[number]
+export type ResamplingAlgorithm = typeof RESAMPLING_ALGORITHMS[number]
 
 interface EqBandPreset {
   readonly frequenciesHz: readonly number[]
@@ -29,6 +31,10 @@ export const DEFAULT_EQ_BAND_COUNT: EqBandCount = 10
 
 export function isEqBandCount(value: unknown): value is EqBandCount {
   return EQ_BAND_COUNTS.some((bandCount) => bandCount === value)
+}
+
+export function isResamplingAlgorithm(value: unknown): value is ResamplingAlgorithm {
+  return RESAMPLING_ALGORITHMS.some((algorithm) => algorithm === value)
 }
 
 export function getEqBandPreset(bandCount: EqBandCount): EqBandPreset {
@@ -97,6 +103,7 @@ export interface FilterNodeConfig {
   readonly q: number
   readonly gainDb: number
   readonly targetSampleRateHz: number
+  readonly resamplingAlgorithm: ResamplingAlgorithm
   readonly eqBandCount: EqBandCount
   readonly eqGainsDb: readonly number[]
 }
@@ -205,7 +212,7 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
   },
   resampler: {
     label: '采样器',
-    description: '实时上采样或抗混叠下采样',
+    description: '使用保持或线性算法模拟目标采样率',
     defaultFrequencyHz: 1_000,
     defaultQ: Math.SQRT1_2,
     defaultGainDb: 0,
@@ -230,6 +237,7 @@ export function createFilterNodeConfig(type: FilterKind, id: string): FilterNode
     q: definition.defaultQ,
     gainDb: definition.defaultGainDb,
     targetSampleRateHz: 24_000,
+    resamplingAlgorithm: 'hold',
     eqBandCount: DEFAULT_EQ_BAND_COUNT,
     eqGainsDb: EQ_BAND_PRESETS[DEFAULT_EQ_BAND_COUNT].frequenciesHz.map(() => 0),
   }
@@ -293,6 +301,9 @@ export function validateFilterChain(
       )
     ) {
       throw new RangeError('Resampler target sample rate must be within [3000, 192000] Hz')
+    }
+    if (filter.type === 'resampler' && !isResamplingAlgorithm(filter.resamplingAlgorithm)) {
+      throw new RangeError(`Resampler algorithm must be one of ${RESAMPLING_ALGORITHMS.join(', ')}`)
     }
   }
 

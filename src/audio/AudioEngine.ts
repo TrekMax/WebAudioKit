@@ -580,6 +580,10 @@ export class AudioEngine {
         filter.id === nextActiveFilters[index]?.id
         && filter.type === nextActiveFilters[index]?.type
         && compiledFilterNodeCount(filter) === compiledFilterNodeCount(nextActiveFilters[index]!)
+        && (
+          filter.type !== 'resampler'
+          || filter.resamplingAlgorithm === nextActiveFilters[index]?.resamplingAlgorithm
+        )
       ))
     ) {
       nextActiveFilters.forEach((filter, index) => {
@@ -641,8 +645,11 @@ export class AudioEngine {
           1 + feedback * feedback - 2 * feedback * Math.cos(omega),
         )
         const filterMagnitude = alpha / Math.max(denominator, 1e-12)
+        const reconstructionMagnitude = filter.resamplingAlgorithm === 'linear'
+          ? linearHoldMagnitude(frequencyHz, targetSampleRateHz)
+          : 1
         responseDb[index] = (responseDb[index] ?? 0)
-          + 20 * Math.log10(Math.max(filterMagnitude, 1e-12))
+          + 20 * Math.log10(Math.max(filterMagnitude * reconstructionMagnitude, 1e-12))
       }
     }
     return responseDb
@@ -1057,6 +1064,7 @@ export class AudioEngine {
       numberOfOutputs: 1,
       channelCountMode: 'max',
       parameterData: { targetSampleRateHz: filter.targetSampleRateHz },
+      processorOptions: { algorithm: filter.resamplingAlgorithm },
     })
   }
 
@@ -1122,6 +1130,13 @@ function createDefaultAudioContext(): AudioContext {
 
 function isAudioContextRunning(context: AudioContext): boolean {
   return context.state === 'running'
+}
+
+function linearHoldMagnitude(frequencyHz: number, targetSampleRateHz: number): number {
+  if (frequencyHz === 0) return 1
+  const normalizedFrequency = Math.PI * frequencyHz / targetSampleRateHz
+  const sinc = Math.sin(normalizedFrequency) / normalizedFrequency
+  return sinc * sinc
 }
 
 function resolveLoadArguments(

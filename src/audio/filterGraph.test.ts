@@ -66,6 +66,7 @@ describe('filter graph compiler', () => {
     expect(filters.every((filter) => filter.enabled)).toBe(true)
     expect(createFilterNodeConfig('resampler', 'rate')).toMatchObject({
       targetSampleRateHz: 24_000,
+      resamplingAlgorithm: 'hold',
     })
     const equalizer = createFilterNodeConfig('equalizer', 'eq')
     expect(equalizer.eqBandCount).toBe(DEFAULT_EQ_BAND_COUNT)
@@ -174,6 +175,10 @@ describe('filter graph compiler', () => {
       ...createFilterNodeConfig('resampler', 'rate'),
       targetSampleRateHz: 2_999,
     }])).toThrow('sample rate')
+    expect(() => validateFilterChain([{
+      ...createFilterNodeConfig('resampler', 'rate'),
+      resamplingAlgorithm: 'cubic' as never,
+    }])).toThrow('algorithm')
     expect(() => validateFilterChain([{
       ...createFilterNodeConfig('equalizer', 'eq'),
       eqGainsDb: [0, 0],

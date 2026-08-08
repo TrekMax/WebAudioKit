@@ -403,6 +403,12 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .resampler-mode-card span { min-width: 0; display: grid; gap: 2px; }
 .resampler-mode-card strong { color: #b7d8cf; font-size: var(--font-small); }
 .resampler-mode-card small { color: #668478; font-size: var(--font-micro); }
+.resampler-algorithm-details { margin: 0; padding: 8px 9px; display: grid; gap: 7px; border: 1px solid rgba(31,223,178,0.16); border-radius: 6px; background: rgba(31,223,178,0.035); }
+.resampler-algorithm-details div { min-width: 0; display: grid; grid-template-columns: 66px minmax(0,1fr); align-items: start; gap: 9px; }
+.resampler-algorithm-details dt { color: var(--faint); font-family: var(--mono); font-size: var(--font-micro); }
+.resampler-algorithm-details dd { min-width: 0; margin: 0; color: var(--muted); font-size: var(--font-small); line-height: 1.45; }
+.resampler-algorithm-details div:first-child dd { color: var(--text); font-family: var(--mono); }
+.resampler-algorithm-details div:nth-child(3) dd { color: var(--accent); font-weight: 700; }
 .resampler-presets { display: grid; grid-template-columns: repeat(3,1fr); gap: 4px; }
 .resampler-presets button { min-height: 27px; color: #778899; border: 1px solid var(--border); border-radius: 4px; background: #0a1118; font-family: var(--mono); font-size: var(--font-micro); cursor: pointer; }
 .resampler-presets button:hover, .resampler-presets button.active { color: var(--accent); border-color: rgba(31,223,178,0.35); background: var(--accent-soft); }

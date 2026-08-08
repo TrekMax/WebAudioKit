@@ -103,8 +103,8 @@ export const FILTER_NODE_GUIDES: Readonly<Record<FilterKind, FilterNodeGuideCopy
   },
   resampler: {
     visualKind: 'waveform',
-    introduction: '在监听链中模拟目标采样率。下采样会先限制高频以避免混叠；上采样不会创造源信号中不存在的高频信息。',
-    parameterSummary: '目标采样率决定新的有效 Nyquist 上限，播放时长保持不变。',
+    introduction: '在监听链中模拟目标采样率。下采样会先限制高频以避免混叠，再选择复古保持或线性平滑方式重建；上采样不会创造源信号中不存在的高频信息。',
+    parameterSummary: '复古保持采用一阶抗混叠与零阶保持，实时成本低，颗粒和阶梯感明显并作为默认值；线性平滑采用一阶抗混叠与抽取后线性插值，同为低成本模式，听感更平滑，但失真、高频衰减与最多一个模拟采样间隔的延迟仍然存在。',
     visualSummary: '示例按较低目标采样率重建波形，高频细节被抗混叠处理抑制。',
   },
 }

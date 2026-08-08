@@ -16,10 +16,12 @@ class ResamplerProcessor extends AudioWorkletProcessor {
     }]
   }
 
-  constructor() {
+  constructor(options = {}) {
     super()
+    this.algorithm = options.processorOptions?.algorithm === 'linear' ? 'linear' : 'hold'
     this.phase = new Float64Array(MAX_CHANNELS)
     this.filtered = new Float32Array(MAX_CHANNELS)
+    this.previous = new Float32Array(MAX_CHANNELS)
     this.held = new Float32Array(MAX_CHANNELS)
     this.initialized = new Uint8Array(MAX_CHANNELS)
   }
@@ -53,6 +55,7 @@ class ResamplerProcessor extends AudioWorkletProcessor {
           const lastSample = input[input.length - 1] || 0
           this.phase[channel] = 0
           this.filtered[channel] = lastSample
+          this.previous[channel] = lastSample
           this.held[channel] = lastSample
           this.initialized[channel] = 1
         }
@@ -61,21 +64,30 @@ class ResamplerProcessor extends AudioWorkletProcessor {
 
       let phase = this.phase[channel]
       let filtered = this.filtered[channel]
+      let previous = this.previous[channel]
       let held = this.held[channel]
       let initialized = this.initialized[channel]
       for (let frame = 0; frame < output.length; frame += 1) {
         const sample = input[frame] || 0
         filtered += lowpassAlpha * (sample - filtered)
         phase += ratio
-        if (!initialized || phase >= 1) {
+        if (!initialized) {
           phase -= Math.floor(phase)
           held = filtered
+          previous = filtered
           initialized = 1
+        } else if (phase >= 1) {
+          phase -= Math.floor(phase)
+          previous = held
+          held = filtered
         }
-        output[frame] = held
+        output[frame] = this.algorithm === 'linear'
+          ? previous + (held - previous) * phase
+          : held
       }
       this.phase[channel] = phase
       this.filtered[channel] = filtered
+      this.previous[channel] = previous
       this.held[channel] = held
       this.initialized[channel] = initialized
     }

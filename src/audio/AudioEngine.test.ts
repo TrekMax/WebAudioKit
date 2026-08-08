@@ -614,6 +614,43 @@ describe('AudioEngine', () => {
     expect(response[3]).toBeLessThan(response[2] ?? 0)
   })
 
+  it('adds linear reconstruction rolloff to resampler spectrum previews', () => {
+    const holdEngine = createEngine(new FakeAudioContext())
+    const linearEngine = createEngine(new FakeAudioContext())
+    const resampler = {
+      ...createFilterNodeConfig('resampler', 'rate'),
+      targetSampleRateHz: 12_000,
+    }
+    holdEngine.setFilterChain([resampler])
+    linearEngine.setFilterChain([{ ...resampler, resamplingAlgorithm: 'linear' }])
+
+    const frequenciesHz = new Float32Array([0, 1_000, 5_000])
+    const holdResponse = holdEngine.getFilterFrequencyResponseDb(frequenciesHz)
+    const linearResponse = linearEngine.getFilterFrequencyResponseDb(frequenciesHz)
+
+    expect(linearResponse[0]).toBeCloseTo(holdResponse[0] ?? 0, 5)
+    expect(linearResponse[1]).toBeLessThan(holdResponse[1] ?? 0)
+    expect(linearResponse[2]).toBeLessThan(holdResponse[2] ?? 0)
+  })
+
+  it('rebuilds the resampler route when its reconstruction algorithm changes', () => {
+    const context = new FakeAudioContext()
+    const engine = createEngine(context)
+    const resampler = createFilterNodeConfig('resampler', 'rate')
+
+    engine.setFilterChain([resampler])
+    const previousFallback = context.gains[1]
+    const previousDry = context.gains[2]
+    const previousWet = context.gains[3]
+    engine.setFilterChain([{ ...resampler, resamplingAlgorithm: 'linear' }])
+
+    expect(context.gains).toHaveLength(7)
+    expect(previousFallback?.disconnected).toBe(true)
+    expect(previousDry?.disconnected).toBe(true)
+    expect(previousWet?.disconnected).toBe(true)
+    expect(engine.getFilterChain()[0]?.resamplingAlgorithm).toBe('linear')
+  })
+
   it('releases replaced filter nodes and keeps exposed configuration immutable', () => {
     const context = new FakeAudioContext()
     const engine = createEngine(context)

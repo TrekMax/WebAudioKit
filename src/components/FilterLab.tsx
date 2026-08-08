@@ -25,6 +25,7 @@ import {
   type EqBandCount,
   type FilterKind,
   type FilterNodeConfig,
+  type ResamplingAlgorithm,
 } from '../audio/filterGraph'
 import {
   FILTER_PRESETS,
@@ -85,6 +86,31 @@ interface FilterLabProps {
 }
 
 const FILTER_TYPES = Object.keys(FILTER_DEFINITIONS) as FilterKind[]
+const RESAMPLING_ALGORITHM_OPTIONS: readonly {
+  readonly value: ResamplingAlgorithm
+  readonly label: string
+  readonly algorithm: string
+  readonly listeningCharacter: string
+  readonly realtimeCost: string
+  readonly recommendation: string
+}[] = [
+  {
+    value: 'hold',
+    label: '复古保持',
+    algorithm: '一阶抗混叠 + 零阶保持',
+    listeningCharacter: '颗粒感和阶梯感明显，高频细节会随目标采样率下降而减少。',
+    realtimeCost: '低',
+    recommendation: '保留当前实现并作为默认值，适合复古采样质感和低成本实时试听。',
+  },
+  {
+    value: 'linear',
+    label: '线性平滑',
+    algorithm: '一阶抗混叠 + 抽取后线性插值',
+    listeningCharacter: '重建更平滑，但失真和高频衰减仍可听见，并带有一个模拟采样间隔的延迟。',
+    realtimeCost: '低',
+    recommendation: '第一阶段加入，适合希望减少阶梯感、同时保持较低实时成本的监听场景。',
+  },
+]
 const FLOATING_INSPECTOR_GAP = 12
 const FLOATING_INSPECTOR_WIDTH = 420
 const PALETTE_GUIDE_WIDTH = 420
@@ -228,6 +254,9 @@ export function FilterLab({
       : selected.targetSampleRateHz > referenceSampleRate
         ? '上采样'
         : '等采样率'
+    : null
+  const selectedResamplingAlgorithm = selected?.type === 'resampler'
+    ? RESAMPLING_ALGORITHM_OPTIONS.find(({ value }) => value === selected.resamplingAlgorithm)
     : null
 
   const showPaletteGuide = useCallback((type: FilterKind, target: HTMLButtonElement) => {
@@ -993,6 +1022,27 @@ export function FilterLab({
                     <Gauge size={16} />
                     <span><strong>{resamplingMode}</strong><small>源 {formatFrequency(referenceSampleRate)} → 目标 {formatFrequency(selected.targetSampleRateHz)}</small></span>
                   </div>
+                  <label className="filter-field resampler-algorithm-field">
+                    <span>重采样算法</span>
+                    <select
+                      value={selected.resamplingAlgorithm}
+                      onChange={(event) => updateSelected({
+                        resamplingAlgorithm: event.target.value as ResamplingAlgorithm,
+                      })}
+                    >
+                      {RESAMPLING_ALGORITHM_OPTIONS.map(({ value, label }) => (
+                        <option key={value} value={value}>{label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {selectedResamplingAlgorithm ? (
+                    <dl className="resampler-algorithm-details">
+                      <div><dt>算法</dt><dd>{selectedResamplingAlgorithm.algorithm}</dd></div>
+                      <div><dt>听感</dt><dd>{selectedResamplingAlgorithm.listeningCharacter}</dd></div>
+                      <div><dt>实时成本</dt><dd>{selectedResamplingAlgorithm.realtimeCost}</dd></div>
+                      <div><dt>建议</dt><dd>{selectedResamplingAlgorithm.recommendation}</dd></div>
+                    </dl>
+                  ) : null}
                   <label className="filter-field filter-slider-field">
                     <span>目标采样率 <output>{formatFrequency(selected.targetSampleRateHz)}</output></span>
                     <input type="range" min={3_000} max={192_000} step={1_000} value={selected.targetSampleRateHz} onChange={(event) => updateSelected({ targetSampleRateHz: Number(event.target.value) })} />
@@ -1045,7 +1095,7 @@ export function FilterLab({
               </div>
 
               <p className="filter-runtime-note">{selected.type === 'resampler'
-                ? '下采样使用实时抗混叠与抽取；上采样由 Web Audio 上下文完成插值，超过输出上下文的采样率不会生成新的频率信息。不支持 AudioWorklet 时节点透明旁路。'
+                ? '复古保持与线性平滑都先执行实时抗混叠；算法仅在目标采样率低于输出上下文时产生差异。上采样不会生成新的频率信息，不支持 AudioWorklet 时节点透明旁路。'
                 : selected.type === 'equalizer'
                   ? `${selected.eqBandCount} 段 EQ 编译为串联的原生 Peaking Biquad；切换段数会重建当前 EQ 分组，但不会重启播放。`
                   : `当前 Nyquist：${formatFrequency(nyquist)}。超出当前设备范围的频率会由 Web Audio 安全钳位。`}</p>
