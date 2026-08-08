@@ -48,6 +48,7 @@ import {
   type StoredRecentWorkspace,
 } from './state/projectStore'
 import { AppHeader, type AppPage } from './components/AppHeader'
+import { AudioWiki } from './components/AudioWiki'
 import { AssetSidebar, type AssetSummary } from './components/AssetSidebar'
 import { AnalysisControls } from './components/AnalysisControls'
 import { ChannelPanel } from './components/ChannelPanel'
@@ -1439,7 +1440,7 @@ export function App() {
           onQuality3dChange={setQuality3d}
           onReset3d={() => reset3dRef.current?.()}
         />
-      </main> : (
+      </main> : appPage === 'filters' ? (
         <FilterLab
           filters={filterChain}
           auditionMode={filterAuditionMode}
@@ -1466,6 +1467,8 @@ export function App() {
           onOutputChannelEnabledChange={(channelIndex, enabled) => ensureEngine().setOutputChannelEnabled(channelIndex, enabled)}
           onOutputBalanceChange={(balance) => ensureEngine().setOutputBalance(balance)}
         />
+      ) : (
+        <AudioWiki />
       )}
 
       <Transport

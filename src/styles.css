@@ -255,10 +255,10 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .filter-preset-panel p { min-height: 2.8em; margin: 0; overflow: hidden; color: #718291; font-size: 7px; line-height: 1.4; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .filter-pane-note { margin: 0 10px 10px; padding: 8px; color: #657485; border: 1px solid var(--border); border-radius: 5px; background: #0a1017; font-size: 7px; line-height: 1.5; }
 .filter-node-guide-popover { width: min(420px,calc(100% - 24px)); max-height: calc(100% - 24px); position: absolute; z-index: 20; overflow-y: auto; pointer-events: none; border: 1px solid rgba(55,79,98,0.98); border-radius: 9px; background: rgba(8,14,21,0.985); box-shadow: 0 22px 56px rgba(0,0,0,0.58), 0 0 0 1px rgba(31,223,178,0.07); backdrop-filter: blur(14px); scrollbar-width: thin; scrollbar-color: #32485a #080e15; }
-.filter-node-guide-popover > header { min-height: 51px; padding: 9px 11px; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 9px; border-bottom: 1px solid var(--border); background: linear-gradient(90deg,rgba(31,223,178,0.065),transparent 72%); }
-.filter-node-guide-popover > header > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
-.filter-node-guide-popover > header strong { color: #d0dbe4; font-size: var(--font-body); }
-.filter-node-guide-popover > header small { color: #648176; font-family: var(--mono); font-size: var(--font-micro); letter-spacing: 0.08em; }
+.filter-guide-header { min-height: 51px; padding: 9px 11px; display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 9px; border-bottom: 1px solid var(--border); background: linear-gradient(90deg,rgba(31,223,178,0.065),transparent 72%); }
+.filter-guide-header > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }
+.filter-guide-header strong { color: #d0dbe4; font-size: var(--font-body); }
+.filter-guide-header small { color: #648176; font-family: var(--mono); font-size: var(--font-micro); letter-spacing: 0.08em; }
 .filter-guide-icon { width: 34px; height: 34px; display: grid; place-items: center; color: var(--accent); border: 1px solid rgba(31,223,178,0.2); border-radius: 6px; background: var(--accent-soft); }
 .filter-guide-badge { padding: 3px 5px; color: #6d827c; border: 1px solid rgba(66,91,84,0.7); border-radius: 999px; font-family: var(--mono); font-size: var(--font-micro); }
 .filter-guide-introduction { margin: 0; padding: 11px 12px 9px; color: #9aa9b6; font-size: var(--font-small); line-height: 1.65; }
@@ -286,6 +286,48 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .filter-guide-spectrum figcaption { min-height: 30px; padding-top: 5px; color: #708192; border-top: 1px solid rgba(38,52,66,0.72); font-size: var(--font-micro); line-height: 1.45; }
 .filter-guide-parameters { margin: 9px 11px 10px; padding: 8px 9px; display: grid; gap: 3px; color: #7e8f9e; border-left: 2px solid rgba(255,179,92,0.62); background: rgba(255,179,92,0.045); font-size: var(--font-micro); line-height: 1.5; }
 .filter-guide-parameters strong { color: #b49b7c; font-size: var(--font-micro); }
+
+.audio-wiki-page { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0,1fr); gap: 1px; background: var(--border); }
+.audio-wiki-hero { min-height: 106px; padding: 18px clamp(22px,3vw,44px); display: flex; align-items: center; justify-content: space-between; gap: 30px; }
+.audio-wiki-hero-copy { min-width: 0; }
+.audio-wiki-hero h1 { margin: 5px 0 5px; display: flex; align-items: center; gap: 9px; color: #e0e8ef; font-size: 21px; letter-spacing: -0.02em; }
+.audio-wiki-hero h1 svg { color: var(--accent); }
+.audio-wiki-hero p { max-width: 720px; margin: 0; color: #718191; font-size: 12px; line-height: 1.55; }
+.audio-wiki-stats { flex: 0 0 auto; display: grid; grid-template-columns: repeat(3,minmax(86px,1fr)); border: 1px solid rgba(53,73,91,0.82); border-radius: 8px; overflow: hidden; background: #080e15; }
+.audio-wiki-stats > span { min-height: 58px; padding: 9px 14px; display: grid; align-content: center; gap: 3px; border-left: 1px solid var(--border); }
+.audio-wiki-stats > span:first-child { border-left: 0; }
+.audio-wiki-stats strong { color: var(--accent); font-family: var(--mono); font-size: 16px; }
+.audio-wiki-stats small { color: #647485; font-size: 9px; }
+.audio-wiki-scroll { min-height: 0; overflow-y: auto; scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: #32485a #080e15; background: radial-gradient(circle at 80% -8%,rgba(31,223,178,0.055),transparent 28%),#070c12; }
+.audio-wiki-layout { width: min(1500px,100%); margin: 0 auto; padding: 20px clamp(18px,2.5vw,36px) 34px; display: grid; grid-template-columns: 238px minmax(0,1fr); align-items: start; gap: 20px; }
+.audio-wiki-index { position: sticky; top: 20px; overflow: hidden; border: 1px solid rgba(49,68,84,0.88); border-radius: 9px; box-shadow: 0 14px 34px rgba(0,0,0,0.2); }
+.audio-wiki-index-heading { min-height: 58px; padding: 11px 13px; display: flex; align-items: center; gap: 9px; color: var(--accent); border-bottom: 1px solid var(--border); background: linear-gradient(105deg,rgba(31,223,178,0.07),transparent 72%); }
+.audio-wiki-index-heading > span { display: grid; gap: 3px; }
+.audio-wiki-index-heading strong { color: #cbd7df; font-size: 12px; }
+.audio-wiki-index-heading small { color: #5e756d; font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em; }
+.audio-wiki-index nav { padding: 7px; display: grid; gap: 4px; }
+.audio-wiki-index nav a { min-height: 43px; padding: 8px 9px; display: grid; grid-template-columns: 22px minmax(0,1fr) auto; align-items: center; gap: 7px; color: #718291; border: 1px solid transparent; border-radius: 6px; text-decoration: none; }
+.audio-wiki-index nav a:hover, .audio-wiki-index nav a:focus-visible { color: var(--accent); border-color: rgba(31,223,178,0.22); background: var(--accent-soft); outline: none; }
+.audio-wiki-index nav a > span { font-family: var(--mono); font-size: 9px; }
+.audio-wiki-index nav a strong { overflow: hidden; color: #9eacb8; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.audio-wiki-index nav a:hover strong, .audio-wiki-index nav a:focus-visible strong { color: #cfe4de; }
+.audio-wiki-index nav a small { color: #536474; font-size: 8px; }
+.audio-wiki-index-note { margin: 0; padding: 11px 12px; display: flex; align-items: flex-start; gap: 8px; color: #657585; border-top: 1px solid var(--border); background: rgba(8,14,21,0.74); font-size: 9px; line-height: 1.55; }
+.audio-wiki-index-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--amber); }
+.audio-wiki-sections { min-width: 0; display: grid; gap: 30px; }
+.audio-wiki-section { min-width: 0; scroll-margin-top: 20px; }
+.audio-wiki-section-heading { min-height: 72px; margin-bottom: 10px; padding: 0 2px 10px; display: flex; align-items: end; justify-content: space-between; gap: 20px; border-bottom: 1px solid rgba(47,65,81,0.74); }
+.audio-wiki-section-heading h2 { margin: 5px 0 4px; display: flex; align-items: center; gap: 7px; color: #cad5de; font-size: 16px; }
+.audio-wiki-section-heading h2 svg { color: var(--accent); }
+.audio-wiki-section-heading p { margin: 0; color: #687989; font-size: 10px; line-height: 1.5; }
+.audio-wiki-section-heading > span { padding-bottom: 3px; color: #526576; font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em; white-space: nowrap; }
+.audio-wiki-grid { min-width: 0; display: grid; grid-template-columns: repeat(2,minmax(330px,1fr)); gap: 12px; }
+.audio-wiki-card { --font-micro: 11px; --font-small: 12px; --font-ui: 13px; --font-body: 15px; --font-control: 16px; min-width: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid rgba(48,68,84,0.94); border-radius: 9px; box-shadow: 0 12px 28px rgba(0,0,0,0.17); }
+.audio-wiki-card .filter-guide-introduction { min-height: 76px; }
+.audio-wiki-card .filter-guide-spectrum { margin-inline: 12px; }
+.audio-wiki-card .filter-guide-parameters { margin-top: auto; }
+.audio-wiki-disclaimer { margin: -5px 0 0; padding: 12px 14px; display: flex; align-items: center; justify-content: center; gap: 8px; color: #667888; border: 1px solid rgba(47,65,81,0.7); border-radius: 7px; background: rgba(12,18,26,0.7); font-size: 10px; line-height: 1.5; text-align: center; }
+.audio-wiki-disclaimer svg { flex: 0 0 auto; color: var(--amber); }
 .filter-graph-panel { display: grid; grid-template-rows: 58px minmax(0,1fr) auto; }
 .filter-graph-canvas { min-width: 0; min-height: 0; position: relative; padding: 35px 26px 70px; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; background-color: #080d14; background-image: linear-gradient(rgba(39,55,69,0.22) 1px, transparent 1px), linear-gradient(90deg, rgba(39,55,69,0.22) 1px, transparent 1px); background-size: 22px 22px; scrollbar-width: thin; scrollbar-color: #2f4254 #090f16; }
 .filter-graph-canvas.dragging { cursor: grabbing; user-select: none; }
@@ -515,6 +557,9 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
   .app-header { grid-template-columns: 250px 1fr auto; }
   .field-label { grid-template-columns: 1fr 100px; }
   .filter-lab-grid { grid-template-columns: 220px minmax(340px,1fr); }
+  .audio-wiki-hero { padding-inline: 22px; }
+  .audio-wiki-layout { grid-template-columns: 210px minmax(0,1fr); gap: 16px; padding-inline: 16px; }
+  .audio-wiki-grid { grid-template-columns: repeat(2,minmax(300px,1fr)); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -663,6 +708,8 @@ input[type="number"],
 :root[data-theme="light"] .panel-heading h2,
 :root[data-theme="light"] .workspace-panel-title,
 :root[data-theme="light"] .filter-lab-header h1,
+:root[data-theme="light"] .audio-wiki-hero h1,
+:root[data-theme="light"] .audio-wiki-section-heading h2,
 :root[data-theme="light"] .filter-pane-heading h2,
 :root[data-theme="light"] .filter-graph-toolbar h2,
 :root[data-theme="light"] .empty-content h1,
@@ -761,8 +808,8 @@ input[type="number"],
 :root[data-theme="light"] .resampler-presets button,
 :root[data-theme="light"] .eq-band-count-selector button,
 :root[data-theme="light"] .eq-band-selector button { color: #536a73; background: #f5f9fa; }
-:root[data-theme="light"] .filter-node-guide-popover > header { background: linear-gradient(90deg,rgba(8,126,105,0.08),transparent 72%); }
-:root[data-theme="light"] .filter-node-guide-popover > header strong,
+:root[data-theme="light"] .filter-guide-header { background: linear-gradient(90deg,rgba(8,126,105,0.08),transparent 72%); }
+:root[data-theme="light"] .filter-guide-header strong,
 :root[data-theme="light"] .filter-guide-figure-heading strong,
 :root[data-theme="light"] .input-info-metadata dd,
 :root[data-theme="light"] .output-channel-controls button strong,
@@ -776,6 +823,23 @@ input[type="number"],
 :root[data-theme="light"] .filter-guide-time-grid { stroke: rgba(75,102,112,0.24); }
 :root[data-theme="light"] .filter-guide-grid text,
 :root[data-theme="light"] .filter-guide-axis-unit { fill: #647981; }
+
+:root[data-theme="light"] .audio-wiki-stats { background: #f4f8f9; border-color: #b9c9ce; }
+:root[data-theme="light"] .audio-wiki-stats small,
+:root[data-theme="light"] .audio-wiki-hero p,
+:root[data-theme="light"] .audio-wiki-section-heading p { color: #60747c; }
+:root[data-theme="light"] .audio-wiki-scroll { scrollbar-color: #a7bbc1 #edf3f5; background: radial-gradient(circle at 80% -8%,rgba(8,126,105,0.07),transparent 28%),#edf3f5; }
+:root[data-theme="light"] .audio-wiki-index,
+:root[data-theme="light"] .audio-wiki-card { border-color: #b8c9ce; box-shadow: 0 12px 28px rgba(47,68,75,0.11); }
+:root[data-theme="light"] .audio-wiki-index-heading { background: linear-gradient(105deg,rgba(8,126,105,0.09),transparent 72%); }
+:root[data-theme="light"] .audio-wiki-index-heading strong,
+:root[data-theme="light"] .audio-wiki-index nav a strong { color: #38515a; }
+:root[data-theme="light"] .audio-wiki-index nav a { color: #61757d; }
+:root[data-theme="light"] .audio-wiki-index nav a:hover strong,
+:root[data-theme="light"] .audio-wiki-index nav a:focus-visible strong { color: #1e5f53; }
+:root[data-theme="light"] .audio-wiki-index-note { color: #60747c; background: #f3f7f8; }
+:root[data-theme="light"] .audio-wiki-section-heading { border-color: #c4d2d6; }
+:root[data-theme="light"] .audio-wiki-disclaimer { color: #60747c; border-color: #c0ced3; background: rgba(248,251,252,0.88); }
 :root[data-theme="light"] .eq-curve-canvas { background: #f5f9fa; border-color: #afc1c7; }
 :root[data-theme="light"] .eq-curve-plot { fill: rgba(255,255,255,0.94); stroke: rgba(83,108,117,0.3); }
 :root[data-theme="light"] .eq-curve-grid line,

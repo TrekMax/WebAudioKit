@@ -38,4 +38,12 @@ describe('realtime spectrum demand', () => {
       filterView: 'spectrogram',
     })).toBe(false)
   })
+
+  it('stops realtime FFT work while the audio wiki is visible', () => {
+    expect(shouldRunRealtimeSpectrum({
+      appPage: 'wiki',
+      analysisView: 'spectrum',
+      filterView: 'spectrum',
+    })).toBe(false)
+  })
 })

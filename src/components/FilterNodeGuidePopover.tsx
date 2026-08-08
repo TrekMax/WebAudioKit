@@ -24,6 +24,11 @@ interface FilterNodeGuidePopoverProps {
   readonly style: CSSProperties
 }
 
+interface FilterNodeGuideContentProps {
+  readonly type: FilterKind
+  readonly badgeLabel?: string
+}
+
 const FREQUENCY_TICKS = [20, 1_000, 20_000] as const
 const DB_TICKS = [-20, -50, -80] as const
 const WAVEFORM_TICKS = [-1, 0, 1] as const
@@ -33,7 +38,7 @@ function formatGuideFrequency(frequencyHz: number): string {
   return `${frequencyHz}`
 }
 
-function processingLabel(type: FilterKind): string {
+function filterNodeProcessingLabel(type: FilterKind): string {
   const kind = FILTER_DEFINITIONS[type].processingKind
   if (kind === 'equalizer') return '7 / 10 / 15-BAND EQ'
   if (kind === 'resampler') return 'AUDIO WORKLET'
@@ -46,7 +51,10 @@ export function FilterNodeGlyph({ type, size = 14 }: { readonly type: FilterKind
   return <Waves size={size} />
 }
 
-export function FilterNodeGuidePopover({ type, style }: FilterNodeGuidePopoverProps) {
+export function FilterNodeGuideContent({
+  type,
+  badgeLabel = '节点说明',
+}: FilterNodeGuideContentProps) {
   const definition = FILTER_DEFINITIONS[type]
   const guide = FILTER_NODE_GUIDES[type]
   const spectrumPoints = guide.visualKind === 'spectrum'
@@ -68,16 +76,11 @@ export function FilterNodeGuidePopover({ type, style }: FilterNodeGuidePopoverPr
   const gradientId = `filter-guide-fill-${type}`
 
   return (
-    <aside
-      id={`filter-node-guide-${type}`}
-      className="filter-node-guide-popover panel-surface"
-      role="tooltip"
-      style={style}
-    >
-      <header>
+    <>
+      <header className="filter-guide-header">
         <span className="filter-guide-icon"><FilterNodeGlyph type={type} size={16} /></span>
-        <span><strong>{definition.label}</strong><small>{processingLabel(type)}</small></span>
-        <span className="filter-guide-badge">节点说明</span>
+        <span><strong>{definition.label}</strong><small>{filterNodeProcessingLabel(type)}</small></span>
+        <span className="filter-guide-badge">{badgeLabel}</span>
       </header>
 
       <p className="filter-guide-introduction">{guide.introduction}</p>
@@ -171,6 +174,19 @@ export function FilterNodeGuidePopover({ type, style }: FilterNodeGuidePopoverPr
       </figure>
 
       <p className="filter-guide-parameters"><strong>参数提示</strong>{guide.parameterSummary}</p>
+    </>
+  )
+}
+
+export function FilterNodeGuidePopover({ type, style }: FilterNodeGuidePopoverProps) {
+  return (
+    <aside
+      id={`filter-node-guide-${type}`}
+      className="filter-node-guide-popover panel-surface"
+      role="tooltip"
+      style={style}
+    >
+      <FilterNodeGuideContent type={type} />
     </aside>
   )
 }

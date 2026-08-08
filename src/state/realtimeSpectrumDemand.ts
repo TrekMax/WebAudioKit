@@ -1,4 +1,4 @@
-export type RealtimeSpectrumAppPage = 'analysis' | 'filters'
+export type RealtimeSpectrumAppPage = 'analysis' | 'filters' | 'wiki'
 export type RealtimeSpectrumAnalysisView = 'spectrum' | 'spectrogram' | '3d'
 export type RealtimeSpectrumFilterView = 'waveform' | 'spectrum' | 'spectrogram'
 
@@ -17,7 +17,7 @@ export function shouldRunRealtimeSpectrum({
   analysisView,
   filterView,
 }: RealtimeSpectrumViewState): boolean {
-  return appPage === 'analysis'
-    ? analysisView === 'spectrum'
-    : filterView === 'spectrum'
+  if (appPage === 'analysis') return analysisView === 'spectrum'
+  if (appPage === 'filters') return filterView === 'spectrum'
+  return false
 }
