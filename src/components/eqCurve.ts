@@ -1,7 +1,9 @@
 import {
-  EQ_BAND_FREQUENCIES_HZ,
+  DEFAULT_EQ_BAND_COUNT,
   EQ_GAIN_MAX_DB,
   EQ_GAIN_MIN_DB,
+  getEqBandPreset,
+  type EqBandCount,
 } from '../audio/filterGraph'
 
 export const EQ_CURVE_VIEWBOX = {
@@ -51,8 +53,11 @@ export function eqYToGain(y: number): number {
   return Math.round(gain / EQ_GAIN_STEP_DB) * EQ_GAIN_STEP_DB
 }
 
-export function buildEqCurvePoints(gainsDb: readonly number[]): EqCurvePoint[] {
-  return EQ_BAND_FREQUENCIES_HZ.map((frequencyHz, index) => {
+export function buildEqCurvePoints(
+  gainsDb: readonly number[],
+  bandCount: EqBandCount = DEFAULT_EQ_BAND_COUNT,
+): EqCurvePoint[] {
+  return getEqBandPreset(bandCount).frequenciesHz.map((frequencyHz, index) => {
     const gainDb = gainsDb[index] ?? 0
     return {
       x: eqFrequencyToX(frequencyHz),

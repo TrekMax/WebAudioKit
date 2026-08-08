@@ -17,11 +17,12 @@ import {
 } from 'lucide-react'
 
 import {
-  EQ_BAND_FREQUENCIES_HZ,
   FILTER_DEFINITIONS,
   MAX_FILTER_NODES,
   createFilterNodeConfig,
+  remapEqGainsDb,
   type FilterAuditionMode,
+  type EqBandCount,
   type FilterKind,
   type FilterNodeConfig,
 } from '../audio/filterGraph'
@@ -632,6 +633,14 @@ export function FilterLab({
       : filter))
   }
 
+  const changeEqBandCount = (eqBandCount: EqBandCount) => {
+    if (!selected || selected.type !== 'equalizer' || selected.eqBandCount === eqBandCount) return
+    updateSelected({
+      eqBandCount,
+      eqGainsDb: remapEqGainsDb(selected.eqGainsDb, selected.eqBandCount, eqBandCount),
+    })
+  }
+
   const changeType = (type: FilterKind) => {
     if (!selected) return
     const defaults = createFilterNodeConfig(type, selected.id)
@@ -817,7 +826,7 @@ export function FilterLab({
                     <span className="filter-node-index">{String(index + 1).padStart(2, '0')}</span>
                     <span className="filter-node-type">{definition.label}</span>
                     <strong>{filter.type === 'equalizer'
-                      ? `${EQ_BAND_FREQUENCIES_HZ.length} BAND`
+                      ? `${filter.eqBandCount} BAND`
                       : formatFrequency(filter.type === 'resampler' ? filter.targetSampleRateHz : filter.frequencyHz)}</strong>
                     <small>{filter.enabled ? 'ACTIVE' : 'BYPASS'}</small>
                     {displayedFilters.length > 1 && (
@@ -900,7 +909,7 @@ export function FilterLab({
           role="dialog"
           aria-modal="false"
           aria-label="节点参数悬浮面板"
-          className={`filter-inspector floating panel-surface ${selected && !draggingNodeId ? 'open' : ''}`}
+          className={`filter-inspector floating panel-surface ${selected?.type === 'equalizer' ? 'eq-expanded' : ''} ${selected && !draggingNodeId ? 'open' : ''}`}
           style={{ left: inspectorPosition.left, top: inspectorPosition.top }}
           onKeyDown={(event) => {
             if (event.key === 'Escape') setSelectedId(null)
@@ -946,7 +955,9 @@ export function FilterLab({
                 </>
               ) : selected.type === 'equalizer' ? (
                 <EqCurveEditor
+                  bandCount={selected.eqBandCount}
                   gainsDb={selected.eqGainsDb}
+                  onBandCountChange={changeEqBandCount}
                   onChange={(eqGainsDb) => updateSelected({ eqGainsDb })}
                 />
               ) : (
@@ -985,7 +996,7 @@ export function FilterLab({
               <p className="filter-runtime-note">{selected.type === 'resampler'
                 ? '下采样使用实时抗混叠与抽取；上采样由 Web Audio 上下文完成插值，超过输出上下文的采样率不会生成新的频率信息。不支持 AudioWorklet 时节点透明旁路。'
                 : selected.type === 'equalizer'
-                  ? '七段 EQ 编译为串联的原生 Peaking Biquad；曲线调整会原位更新监听参数，不重启当前播放。'
+                  ? `${selected.eqBandCount} 段 EQ 编译为串联的原生 Peaking Biquad；切换段数会重建当前 EQ 分组，但不会重启播放。`
                   : `当前 Nyquist：${formatFrequency(nyquist)}。超出当前设备范围的频率会由 Web Audio 安全钳位。`}</p>
             </div>
           ) : (

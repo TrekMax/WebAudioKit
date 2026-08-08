@@ -1,8 +1,79 @@
 export const MAX_FILTER_NODES = 16
-export const EQ_BAND_FREQUENCIES_HZ = [60, 150, 400, 1_000, 2_500, 6_000, 15_000] as const
 export const EQ_GAIN_MIN_DB = -24
 export const EQ_GAIN_MAX_DB = 24
-export const EQ_BAND_Q = 1.1
+export const EQ_BAND_COUNTS = [7, 10, 15] as const
+
+export type EqBandCount = typeof EQ_BAND_COUNTS[number]
+
+interface EqBandPreset {
+  readonly frequenciesHz: readonly number[]
+  readonly q: number
+}
+
+export const EQ_BAND_PRESETS: Readonly<Record<EqBandCount, EqBandPreset>> = {
+  7: {
+    frequenciesHz: [60, 150, 400, 1_000, 2_500, 6_000, 16_000],
+    q: 1.1,
+  },
+  10: {
+    frequenciesHz: [31.5, 63, 125, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000],
+    q: Math.SQRT2,
+  },
+  15: {
+    frequenciesHz: [25, 40, 63, 100, 160, 250, 400, 630, 1_000, 1_600, 2_500, 4_000, 6_300, 10_000, 16_000],
+    q: 2.15,
+  },
+}
+
+export const DEFAULT_EQ_BAND_COUNT: EqBandCount = 10
+
+export function isEqBandCount(value: unknown): value is EqBandCount {
+  return EQ_BAND_COUNTS.some((bandCount) => bandCount === value)
+}
+
+export function getEqBandPreset(bandCount: EqBandCount): EqBandPreset {
+  return EQ_BAND_PRESETS[bandCount]
+}
+
+export function remapEqGainsDb(
+  gainsDb: readonly number[],
+  sourceBandCount: EqBandCount,
+  targetBandCount: EqBandCount,
+): readonly number[] {
+  const sourceFrequenciesHz = getEqBandPreset(sourceBandCount).frequenciesHz
+  const targetFrequenciesHz = getEqBandPreset(targetBandCount).frequenciesHz
+  if (gainsDb.length !== sourceFrequenciesHz.length) {
+    throw new RangeError(`Equalizer must contain ${sourceFrequenciesHz.length} bands before remapping`)
+  }
+  if (sourceBandCount === targetBandCount) return [...gainsDb]
+
+  return targetFrequenciesHz.map((targetFrequencyHz) => {
+    if (targetFrequencyHz <= (sourceFrequenciesHz[0] ?? targetFrequencyHz)) {
+      return clampEqGain(gainsDb[0] ?? 0)
+    }
+    const lastIndex = sourceFrequenciesHz.length - 1
+    if (targetFrequencyHz >= (sourceFrequenciesHz[lastIndex] ?? targetFrequencyHz)) {
+      return clampEqGain(gainsDb[lastIndex] ?? 0)
+    }
+
+    const upperIndex = sourceFrequenciesHz.findIndex((frequencyHz) => frequencyHz >= targetFrequencyHz)
+    const lowerIndex = Math.max(0, upperIndex - 1)
+    const lowerFrequencyHz = sourceFrequenciesHz[lowerIndex] ?? targetFrequencyHz
+    const upperFrequencyHz = sourceFrequenciesHz[upperIndex] ?? targetFrequencyHz
+    const lowerGainDb = gainsDb[lowerIndex] ?? 0
+    const upperGainDb = gainsDb[upperIndex] ?? lowerGainDb
+    const unit = (
+      Math.log(targetFrequencyHz) - Math.log(lowerFrequencyHz)
+    ) / (
+      Math.log(upperFrequencyHz) - Math.log(lowerFrequencyHz)
+    )
+    return clampEqGain(lowerGainDb + (upperGainDb - lowerGainDb) * unit)
+  })
+}
+
+function clampEqGain(gainDb: number): number {
+  return Math.min(EQ_GAIN_MAX_DB, Math.max(EQ_GAIN_MIN_DB, gainDb))
+}
 
 export type FilterKind =
   | 'lowpass'
@@ -26,6 +97,7 @@ export interface FilterNodeConfig {
   readonly q: number
   readonly gainDb: number
   readonly targetSampleRateHz: number
+  readonly eqBandCount: EqBandCount
   readonly eqGainsDb: readonly number[]
 }
 
@@ -123,9 +195,9 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
   },
   equalizer: {
     label: 'EQ 曲线',
-    description: '七段图示均衡曲线',
+    description: '可切换 7 / 10 / 15 段图示均衡曲线',
     defaultFrequencyHz: 1_000,
-    defaultQ: EQ_BAND_Q,
+    defaultQ: EQ_BAND_PRESETS[DEFAULT_EQ_BAND_COUNT].q,
     defaultGainDb: 0,
     usesQ: false,
     usesGain: false,
@@ -158,7 +230,8 @@ export function createFilterNodeConfig(type: FilterKind, id: string): FilterNode
     q: definition.defaultQ,
     gainDb: definition.defaultGainDb,
     targetSampleRateHz: 24_000,
-    eqGainsDb: EQ_BAND_FREQUENCIES_HZ.map(() => 0),
+    eqBandCount: DEFAULT_EQ_BAND_COUNT,
+    eqGainsDb: EQ_BAND_PRESETS[DEFAULT_EQ_BAND_COUNT].frequenciesHz.map(() => 0),
   }
 }
 
@@ -197,9 +270,13 @@ export function validateFilterChain(
     if (!Number.isFinite(filter.gainDb) || filter.gainDb < -40 || filter.gainDb > 40) {
       throw new RangeError('Filter gain must be within [-40, 40] dB')
     }
+    if (!isEqBandCount(filter.eqBandCount)) {
+      throw new RangeError(`Equalizer band count must be one of ${EQ_BAND_COUNTS.join(', ')}`)
+    }
     if (filter.type === 'equalizer') {
-      if (!Array.isArray(filter.eqGainsDb) || filter.eqGainsDb.length !== EQ_BAND_FREQUENCIES_HZ.length) {
-        throw new RangeError(`Equalizer must contain ${EQ_BAND_FREQUENCIES_HZ.length} bands`)
+      const preset = getEqBandPreset(filter.eqBandCount)
+      if (!Array.isArray(filter.eqGainsDb) || filter.eqGainsDb.length !== preset.frequenciesHz.length) {
+        throw new RangeError(`Equalizer must contain ${preset.frequenciesHz.length} bands`)
       }
       for (const gainDb of filter.eqGainsDb) {
         if (!Number.isFinite(gainDb) || gainDb < EQ_GAIN_MIN_DB || gainDb > EQ_GAIN_MAX_DB) {
@@ -239,7 +316,8 @@ export function compileFilterChain(
       if (!filter.enabled) continue
       const nodes: AudioNode[] = []
       if (filter.type === 'equalizer') {
-        for (let index = 0; index < EQ_BAND_FREQUENCIES_HZ.length; index += 1) {
+        const preset = getEqBandPreset(filter.eqBandCount)
+        for (let index = 0; index < preset.frequenciesHz.length; index += 1) {
           const node = context.createBiquadFilter()
           nodes.push(node)
           compiled.push(node)
@@ -275,14 +353,15 @@ export function applyFilterNodeConfig(
   time: number,
 ): void {
   if (filter.type === 'equalizer') {
-    if (nodes.length !== EQ_BAND_FREQUENCIES_HZ.length) {
+    const preset = getEqBandPreset(filter.eqBandCount)
+    if (nodes.length !== preset.frequenciesHz.length) {
       throw new Error('Equalizer runtime node count does not match its band count')
     }
     nodes.forEach((node, index) => {
       const biquad = node as BiquadFilterNode
       biquad.type = 'peaking'
-      biquad.frequency.setValueAtTime(EQ_BAND_FREQUENCIES_HZ[index] ?? 1_000, time)
-      biquad.Q.setValueAtTime(EQ_BAND_Q, time)
+      biquad.frequency.setValueAtTime(preset.frequenciesHz[index] ?? 1_000, time)
+      biquad.Q.setValueAtTime(preset.q, time)
       biquad.gain.setValueAtTime(filter.eqGainsDb[index] ?? 0, time)
     })
     return
@@ -304,5 +383,7 @@ export function applyFilterNodeConfig(
 }
 
 export function compiledFilterNodeCount(filter: FilterNodeConfig): number {
-  return filter.type === 'equalizer' ? EQ_BAND_FREQUENCIES_HZ.length : 1
+  return filter.type === 'equalizer'
+    ? getEqBandPreset(filter.eqBandCount).frequenciesHz.length
+    : 1
 }

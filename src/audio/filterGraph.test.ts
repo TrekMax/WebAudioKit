@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  EQ_BAND_FREQUENCIES_HZ,
-  EQ_BAND_Q,
+  DEFAULT_EQ_BAND_COUNT,
+  EQ_BAND_COUNTS,
+  EQ_BAND_PRESETS,
   FILTER_DEFINITIONS,
   cloneFilterNodeConfig,
   compileFilterChain,
   createFilterNodeConfig,
+  remapEqGainsDb,
   validateFilterChain,
+  type EqBandCount,
   type FilterKind,
 } from './filterGraph'
 
@@ -64,8 +67,10 @@ describe('filter graph compiler', () => {
     expect(createFilterNodeConfig('resampler', 'rate')).toMatchObject({
       targetSampleRateHz: 24_000,
     })
-    expect(createFilterNodeConfig('equalizer', 'eq').eqGainsDb).toEqual(
-      EQ_BAND_FREQUENCIES_HZ.map(() => 0),
+    const equalizer = createFilterNodeConfig('equalizer', 'eq')
+    expect(equalizer.eqBandCount).toBe(DEFAULT_EQ_BAND_COUNT)
+    expect(equalizer.eqGainsDb).toEqual(
+      EQ_BAND_PRESETS[DEFAULT_EQ_BAND_COUNT].frequenciesHz.map(() => 0),
     )
   })
 
@@ -112,24 +117,41 @@ describe('filter graph compiler', () => {
     expect(resampler.targetSampleRateHz.value).toBe(16_000)
   })
 
-  it('compiles one equalizer node into an ordered seven-band peaking bank', () => {
-    const context = new FakeFilterContext()
-    const equalizer = {
-      ...createFilterNodeConfig('equalizer', 'tone-shape'),
-      eqGainsDb: [-6, -3, 0, 2, 4, 1, -2],
+  it('compiles every equalizer preset into its ordered peaking bank', () => {
+    for (const eqBandCount of EQ_BAND_COUNTS) {
+      const context = new FakeFilterContext()
+      const preset = EQ_BAND_PRESETS[eqBandCount]
+      const equalizer = {
+        ...createFilterNodeConfig('equalizer', `tone-shape-${eqBandCount}`),
+        eqBandCount,
+        eqGainsDb: preset.frequenciesHz.map((_, index) => index - 4),
+      }
+
+      const compiled = compileFilterChain(context, [equalizer])
+
+      expect(compiled).toHaveLength(preset.frequenciesHz.length)
+      expect(context.nodes.map((node) => node.type)).toEqual(
+        preset.frequenciesHz.map(() => 'peaking'),
+      )
+      expect(context.nodes.map((node) => node.frequency.value)).toEqual(preset.frequenciesHz)
+      expect(context.nodes.map((node) => node.Q.value)).toEqual(
+        preset.frequenciesHz.map(() => preset.q),
+      )
+      expect(context.nodes.map((node) => node.gain.value)).toEqual(equalizer.eqGainsDb)
     }
+  })
 
-    const compiled = compileFilterChain(context, [equalizer])
+  it('remaps equalizer gains across presets on a logarithmic frequency scale', () => {
+    const sevenBandGains = [-6, -3, 0, 4, 8, 2, -4]
+    const tenBandGains = remapEqGainsDb(sevenBandGains, 7, 10)
+    const fifteenBandGains = remapEqGainsDb(tenBandGains, 10, 15)
 
-    expect(compiled).toHaveLength(EQ_BAND_FREQUENCIES_HZ.length)
-    expect(context.nodes.map((node) => node.type)).toEqual(
-      EQ_BAND_FREQUENCIES_HZ.map(() => 'peaking'),
-    )
-    expect(context.nodes.map((node) => node.frequency.value)).toEqual(EQ_BAND_FREQUENCIES_HZ)
-    expect(context.nodes.map((node) => node.Q.value)).toEqual(
-      EQ_BAND_FREQUENCIES_HZ.map(() => EQ_BAND_Q),
-    )
-    expect(context.nodes.map((node) => node.gain.value)).toEqual(equalizer.eqGainsDb)
+    expect(tenBandGains).toHaveLength(10)
+    expect(tenBandGains[0]).toBe(-6)
+    expect(tenBandGains[5]).toBeCloseTo(4, 8)
+    expect(tenBandGains.at(-1)).toBe(-4)
+    expect(fifteenBandGains).toHaveLength(15)
+    expect(fifteenBandGains.every((gainDb) => Number.isFinite(gainDb))).toBe(true)
   })
 
   it('deep-copies equalizer bands', () => {
@@ -155,10 +177,14 @@ describe('filter graph compiler', () => {
     expect(() => validateFilterChain([{
       ...createFilterNodeConfig('equalizer', 'eq'),
       eqGainsDb: [0, 0],
-    }])).toThrow('7 bands')
+    }])).toThrow('10 bands')
     expect(() => validateFilterChain([{
       ...createFilterNodeConfig('equalizer', 'eq'),
-      eqGainsDb: [0, 0, 0, 0, 0, 0, 25],
+      eqGainsDb: [0, 0, 0, 0, 0, 0, 0, 0, 0, 25],
     }])).toThrow('Equalizer gain')
+    expect(() => validateFilterChain([{
+      ...createFilterNodeConfig('equalizer', 'eq'),
+      eqBandCount: 12 as EqBandCount,
+    }])).toThrow('band count')
   })
 })

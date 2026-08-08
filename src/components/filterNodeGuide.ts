@@ -97,9 +97,9 @@ export const FILTER_NODE_GUIDES: Readonly<Record<FilterKind, FilterNodeGuideCopy
   },
   equalizer: {
     visualKind: 'spectrum',
-    introduction: '用七个固定中心频段共同塑造整体音色，可直观组合低频、中频和高频的提升或削减。',
-    parameterSummary: '拖动 60 Hz 至 15 kHz 的七个频段，每段可调 ±24 dB。',
-    visualSummary: '示例组合多个宽峰与凹陷，展示七段曲线对整体频谱的塑形。',
+    introduction: '用固定中心频段共同塑造整体音色，可在 7、10 与 15 段精度间切换，并组合低频、中频和高频的提升或削减。',
+    parameterSummary: '默认使用 10 段；各模式覆盖约 25 Hz 至 16 kHz，每段可调 ±24 dB。',
+    visualSummary: '示例组合多个宽峰与凹陷，展示多段曲线对整体频谱的塑形。',
   },
   resampler: {
     visualKind: 'waveform',
@@ -186,10 +186,10 @@ function exampleResponseDb(type: FilterKind, unit: number): number {
     case 'allpass':
       return 0
     case 'equalizer':
-      return 8 * gaussian(unit, frequencyToUnit(60), 0.065)
-        - 6 * gaussian(unit, frequencyToUnit(400), 0.08)
-        + 9 * gaussian(unit, frequencyToUnit(2_500), 0.09)
-        - 7 * gaussian(unit, frequencyToUnit(15_000), 0.07)
+      return 8 * gaussian(unit, frequencyToUnit(63), 0.065)
+        - 6 * gaussian(unit, frequencyToUnit(500), 0.08)
+        + 9 * gaussian(unit, frequencyToUnit(2_000), 0.09)
+        - 7 * gaussian(unit, frequencyToUnit(16_000), 0.07)
     case 'resampler':
       return -52 * smoothStep(
         frequencyToUnit(7_500),

@@ -35,7 +35,7 @@ function formatGuideFrequency(frequencyHz: number): string {
 
 function processingLabel(type: FilterKind): string {
   const kind = FILTER_DEFINITIONS[type].processingKind
-  if (kind === 'equalizer') return '7-BAND EQ'
+  if (kind === 'equalizer') return '7 / 10 / 15-BAND EQ'
   if (kind === 'resampler') return 'AUDIO WORKLET'
   return 'BIQUAD FILTER'
 }

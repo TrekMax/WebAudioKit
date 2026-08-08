@@ -579,6 +579,7 @@ export class AudioEngine {
       && currentActiveFilters.every((filter, index) => (
         filter.id === nextActiveFilters[index]?.id
         && filter.type === nextActiveFilters[index]?.type
+        && compiledFilterNodeCount(filter) === compiledFilterNodeCount(nextActiveFilters[index]!)
       ))
     ) {
       nextActiveFilters.forEach((filter, index) => {
