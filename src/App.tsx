@@ -57,6 +57,7 @@ import {
   type WavExportRequest,
 } from './components/ExportDialog'
 import { FilterLab } from './components/FilterLab'
+import type { FilterTrackPreviewMode } from './components/FilterTrackPreview'
 import type { Fft3DMode, Fft3DQuality } from './components/Fft3DView'
 import { SpectrogramCanvas } from './components/SpectrogramCanvas'
 import { SpectrumCanvas } from './components/SpectrumCanvas'
@@ -67,6 +68,7 @@ import {
   type SampleSelection,
   type WorkspaceAnalysisConfig,
 } from './workspaceTypes'
+import { shouldRunRealtimeSpectrum } from './state/realtimeSpectrumDemand'
 
 type AnalysisTab = 'spectrum' | 'spectrogram' | '3d'
 
@@ -282,6 +284,7 @@ export function App() {
   const [appPage, setAppPage] = useState<AppPage>('analysis')
   const [filterChain, setFilterChain] = useState<readonly FilterNodeConfig[]>([])
   const [filterAuditionMode, setFilterAuditionMode] = useState<FilterAuditionMode>('original')
+  const [filterPreviewMode, setFilterPreviewMode] = useState<FilterTrackPreviewMode>('waveform')
   const [audioContextSampleRate, setAudioContextSampleRate] = useState<number | null>(null)
   const [analysisTab, setAnalysisTab] = useState<AnalysisTab>('spectrum')
   const [mode3d, setMode3d] = useState<Fft3DMode>('surface')
@@ -301,6 +304,12 @@ export function App() {
   const [dropActive, setDropActive] = useState(false)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  const realtimeSpectrumVisible = shouldRunRealtimeSpectrum({
+    appPage,
+    analysisView: analysisTab,
+    filterView: filterPreviewMode,
+  })
 
   const activeAsset = useMemo(
     () => assets.find((asset) => asset.id === activeId) ?? null,
@@ -907,7 +916,13 @@ export function App() {
   }, [activeAsset, ensureEngine])
 
   useEffect(() => {
-    if (!activeAsset || spectrumFrozen) return
+    if (realtimeSpectrumVisible) return
+    clientsRef.current?.realtime.invalidateAnalysis()
+    realtimeAnchorRef.current = { assetId: '', sample: -1, key: '' }
+  }, [realtimeSpectrumVisible])
+
+  useEffect(() => {
+    if (!activeAsset || spectrumFrozen || !realtimeSpectrumVisible) return
     const comparisonChannels = normalizeChannelSet(
       activeAsset.visibleChannels,
       activeAsset.buffer.numberOfChannels,
@@ -998,6 +1013,7 @@ export function App() {
     playback.kind,
     playback.positionSample,
     playback.positionSeconds,
+    realtimeSpectrumVisible,
     spectrumComparison,
     spectrumFrozen,
   ])
@@ -1431,6 +1447,7 @@ export function App() {
           buffer={activeAsset?.buffer ?? null}
           currentSample={playback.positionSample}
           playing={playback.kind === 'playing'}
+          previewMode={filterPreviewMode}
           sampleRate={activeAsset?.buffer.sampleRate ?? null}
           outputSampleRate={audioContextSampleRate ?? activeAsset?.buffer.sampleRate ?? null}
           spectrum={realtimeResult ?? realtimeChannelResults[0]?.preview ?? null}
@@ -1443,6 +1460,7 @@ export function App() {
           getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
           onFiltersChange={handleFilterChainChange}
           onAuditionModeChange={handleFilterAuditionChange}
+          onPreviewModeChange={setFilterPreviewMode}
           onSeekSample={seekSample}
           onVolumeChange={(volume) => ensureEngine().setVolume(volume)}
           onOutputChannelEnabledChange={(channelIndex, enabled) => ensureEngine().setOutputChannelEnabled(channelIndex, enabled)}

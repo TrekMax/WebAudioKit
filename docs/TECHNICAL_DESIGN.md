@@ -535,6 +535,8 @@ interface WaveformPyramid {
 
 文件播放场景的实时 FFT 不在音频渲染线程执行。播放控制器以 15–30 Hz 发布当前采样位置，分析协调器：
 
+分析协调器只在分析工作台实时频谱或滤波页 A/B 频谱实际可见时运行；切换到波形、二维声谱或 3D 后取消当前实时任务并清空调度锚点，重新进入频谱时立即请求当前位置帧。离线 STFT 结果不受该可见性门控影响。
+
 1. 以当前位置为窗中心计算所需 `[start, start + N)`。
 2. 从 `AudioBuffer` 复制最多 `N * channels` 个样本到可转移的小型 `Float32Array`。
 3. 单曲线模式向 FFT Worker 提交一个 frame；多声道对比模式在同一 `analyze-channels` job 中提交可见源声道索引，不为每条曲线创建独立 Worker。

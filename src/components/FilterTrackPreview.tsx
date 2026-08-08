@@ -50,15 +50,17 @@ interface FilterTrackPreviewProps {
   readonly filters: readonly FilterNodeConfig[]
   readonly auditionMode: FilterAuditionMode
   readonly playing: boolean
+  readonly viewMode: FilterTrackPreviewMode
   readonly spectrum: StftPreviewResult | null
   readonly spectrogram: StftPreviewResult | null
   readonly contextSampleRate: number
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
   readonly onAuditionModeChange: (mode: FilterAuditionMode) => void
+  readonly onViewModeChange: (mode: FilterTrackPreviewMode) => void
   readonly onSeekSample: (sample: number) => void
 }
 
-type TrackViewMode = 'waveform' | 'spectrum' | 'spectrogram'
+export type FilterTrackPreviewMode = 'waveform' | 'spectrum' | 'spectrogram'
 
 interface TrackResizeSession {
   readonly pointerId: number
@@ -70,7 +72,7 @@ interface TrackResizeSession {
 interface TrackTimeViewportState {
   readonly viewport: TrackTimeViewport
   readonly buffer: AudioBuffer | null
-  readonly viewMode: TrackViewMode
+  readonly viewMode: FilterTrackPreviewMode
   readonly spectrogram: StftPreviewResult | null
 }
 
@@ -89,7 +91,7 @@ interface TrackLaneProps {
   readonly overview: TrackOverview
   readonly width: number
   readonly height: number
-  readonly viewMode: TrackViewMode
+  readonly viewMode: FilterTrackPreviewMode
   readonly spectrum: StftPreviewResult | null
   readonly spectrogram: StftPreviewResult | null
   readonly spectrogramResponseDb: Float32Array | null
@@ -178,7 +180,7 @@ function trackPlotPositionAtClientX(
 
 function resolvePreviewTimeDomain(
   buffer: AudioBuffer | null,
-  viewMode: TrackViewMode,
+  viewMode: FilterTrackPreviewMode,
   spectrogram: StftPreviewResult | null,
 ): readonly [number, number] {
   const sourceLength = buffer?.length ?? 0
@@ -296,7 +298,8 @@ function TrackLane({
   onSeekSample,
   onTimeViewportChange,
 }: TrackLaneProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const staticCanvasRef = useRef<HTMLCanvasElement>(null)
+  const playheadCanvasRef = useRef<HTMLCanvasElement>(null)
   const palette = TRACK_CANVAS_PALETTES[theme]
   const timeMode = viewMode !== 'spectrum'
   const playheadPosition = timeMode
@@ -321,13 +324,15 @@ function TrackLane({
   }, [mode, spectrogram, spectrogramResponseDb, viewMode])
 
   useEffect(() => {
-    const canvas = canvasRef.current
+    const canvas = staticCanvasRef.current
     if (!canvas || width <= 0) return
     const dpr = Math.min(2, window.devicePixelRatio || 1)
-    canvas.width = Math.max(1, Math.round(width * dpr))
-    canvas.height = Math.round(height * dpr)
-    canvas.style.width = `${width}px`
-    canvas.style.height = `${height}px`
+    const backingWidth = Math.max(1, Math.round(width * dpr))
+    const backingHeight = Math.max(1, Math.round(height * dpr))
+    if (canvas.width !== backingWidth) canvas.width = backingWidth
+    if (canvas.height !== backingHeight) canvas.height = backingHeight
+    if (canvas.style.width !== `${width}px`) canvas.style.width = `${width}px`
+    if (canvas.style.height !== `${height}px`) canvas.style.height = `${height}px`
     const context = canvas.getContext('2d')
     if (!context) return
     context.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -422,15 +427,6 @@ function TrackLane({
       }
       context.globalAlpha = 1
 
-      if (playheadPosition !== null) {
-        const cursorX = plotLeft + playheadPosition * plotWidth
-        context.strokeStyle = active ? palette.activePlayhead : palette.inactivePlayhead
-        context.lineWidth = active ? 1.5 : 1
-        context.beginPath()
-        context.moveTo(cursorX, plotTop + 3)
-        context.lineTo(cursorX, plotBottom - 3)
-        context.stroke()
-      }
     } else if (
       viewMode === 'spectrum'
       && spectrum
@@ -485,16 +481,6 @@ function TrackLane({
         context.font = '12px Inter, system-ui, sans-serif'
         context.textAlign = 'center'
         context.fillText('完成 FFT 分析后显示二维声谱', plotLeft + plotWidth / 2, plotTop + plotHeight / 2)
-      } else {
-        if (playheadPosition !== null) {
-          const cursorX = plotLeft + playheadPosition * plotWidth
-          context.strokeStyle = active ? '#f4fbf8' : 'rgba(255,179,92,0.68)'
-          context.lineWidth = active ? 1.5 : 1
-          context.beginPath()
-          context.moveTo(cursorX, plotTop + 3)
-          context.lineTo(cursorX, plotBottom - 3)
-          context.stroke()
-        }
       }
     }
   }, [
@@ -507,7 +493,6 @@ function TrackLane({
     mode,
     overview,
     palette,
-    playheadPosition,
     sampleRate,
     spectrum,
     spectrogram,
@@ -517,6 +502,37 @@ function TrackLane({
     viewMode,
     width,
   ])
+
+  useEffect(() => {
+    const canvas = playheadCanvasRef.current
+    if (!canvas || width <= 0) return
+    const dpr = Math.min(2, window.devicePixelRatio || 1)
+    const backingWidth = Math.max(1, Math.round(width * dpr))
+    const backingHeight = Math.max(1, Math.round(height * dpr))
+    if (canvas.width !== backingWidth) canvas.width = backingWidth
+    if (canvas.height !== backingHeight) canvas.height = backingHeight
+    if (canvas.style.width !== `${width}px`) canvas.style.width = `${width}px`
+    if (canvas.style.height !== `${height}px`) canvas.style.height = `${height}px`
+    const context = canvas.getContext('2d')
+    if (!context) return
+    context.setTransform(dpr, 0, 0, dpr, 0, 0)
+    context.clearRect(0, 0, width, height)
+    if (playheadPosition === null || viewMode === 'spectrum') return
+
+    const plotLeft = TRACK_PLOT_MARGIN.left
+    const plotTop = TRACK_PLOT_MARGIN.top
+    const plotWidth = Math.max(1, width - plotLeft - TRACK_PLOT_MARGIN.right)
+    const plotHeight = Math.max(1, height - plotTop - TRACK_PLOT_MARGIN.bottom)
+    const cursorX = plotLeft + playheadPosition * plotWidth
+    context.strokeStyle = viewMode === 'spectrogram'
+      ? active ? '#f4fbf8' : 'rgba(255,179,92,0.68)'
+      : active ? palette.activePlayhead : palette.inactivePlayhead
+    context.lineWidth = active ? 1.5 : 1
+    context.beginPath()
+    context.moveTo(cursorX, plotTop + 3)
+    context.lineTo(cursorX, plotTop + plotHeight - 3)
+    context.stroke()
+  }, [active, height, palette, playheadPosition, viewMode, width])
 
   const handleClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
     onSelect()
@@ -551,7 +567,8 @@ function TrackLane({
       onClick={handleClick}
       onWheel={handleWheel}
     >
-      <canvas ref={canvasRef} aria-hidden="true" />
+      <canvas ref={staticCanvasRef} className="audition-track-static-canvas" aria-hidden="true" />
+      <canvas ref={playheadCanvasRef} className="audition-track-playhead-canvas" aria-hidden="true" />
       <span className="audition-track-copy">
         <span className="audition-track-letter">{mode === 'original' ? 'A' : 'B'}</span>
         <span><strong>{title}</strong><small>{detail}</small></span>
@@ -567,11 +584,13 @@ export function FilterTrackPreview({
   filters,
   auditionMode,
   playing,
+  viewMode,
   spectrum,
   spectrogram,
   contextSampleRate,
   getFilterFrequencyResponseDb,
   onAuditionModeChange,
+  onViewModeChange,
   onSeekSample,
 }: FilterTrackPreviewProps) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -584,7 +603,6 @@ export function FilterTrackPreview({
     maximumTrackLaneHeight(typeof window === 'undefined' ? 0 : window.innerHeight)
   ))
   const [resizing, setResizing] = useState(false)
-  const [viewMode, setViewMode] = useState<TrackViewMode>('waveform')
   const [timeViewportState, setTimeViewportState] = useState<TrackTimeViewportState>(() => ({
     viewport: createTrackTimeViewport(0, 0),
     buffer: null,
@@ -800,9 +818,9 @@ export function FilterTrackPreview({
         <span>{previewIcon}<strong>声轨 A/B 试听</strong><small>{previewDescription}</small></span>
         <span className="audition-preview-actions">
           <span className="audition-view-switch" role="group" aria-label="声轨显示模式">
-            <button type="button" className={viewMode === 'waveform' ? 'active' : ''} aria-pressed={viewMode === 'waveform'} onClick={() => setViewMode('waveform')}><AudioWaveform size={12} /> 波形</button>
-            <button type="button" className={viewMode === 'spectrum' ? 'active' : ''} aria-pressed={viewMode === 'spectrum'} onClick={() => setViewMode('spectrum')}><Activity size={12} /> 频谱</button>
-            <button type="button" className={viewMode === 'spectrogram' ? 'active' : ''} aria-pressed={viewMode === 'spectrogram'} onClick={() => setViewMode('spectrogram')}><ScanLine size={12} /> 二维声谱</button>
+            <button type="button" className={viewMode === 'waveform' ? 'active' : ''} aria-pressed={viewMode === 'waveform'} onClick={() => onViewModeChange('waveform')}><AudioWaveform size={12} /> 波形</button>
+            <button type="button" className={viewMode === 'spectrum' ? 'active' : ''} aria-pressed={viewMode === 'spectrum'} onClick={() => onViewModeChange('spectrum')}><Activity size={12} /> 频谱</button>
+            <button type="button" className={viewMode === 'spectrogram' ? 'active' : ''} aria-pressed={viewMode === 'spectrogram'} onClick={() => onViewModeChange('spectrogram')}><ScanLine size={12} /> 二维声谱</button>
           </span>
           <button
             type="button"

@@ -35,7 +35,10 @@ import {
 } from '../audio/filterPresets'
 import type { StftPreviewResult } from '../audio/analysis'
 import { formatTime } from '../visualization/format'
-import { FilterTrackPreview } from './FilterTrackPreview'
+import {
+  FilterTrackPreview,
+  type FilterTrackPreviewMode,
+} from './FilterTrackPreview'
 import {
   FilterNodeGlyph,
   FilterNodeGuidePopover,
@@ -58,6 +61,7 @@ interface FilterLabProps {
   readonly buffer: AudioBuffer | null
   readonly currentSample: number
   readonly playing: boolean
+  readonly previewMode: FilterTrackPreviewMode
   readonly sampleRate: number | null
   readonly outputSampleRate: number | null
   readonly spectrum: StftPreviewResult | null
@@ -80,6 +84,7 @@ interface FilterLabProps {
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
   readonly onFiltersChange: (filters: readonly FilterNodeConfig[]) => void
   readonly onAuditionModeChange: (mode: FilterAuditionMode) => void
+  readonly onPreviewModeChange: (mode: FilterTrackPreviewMode) => void
   readonly onSeekSample: (sample: number) => void
   readonly onVolumeChange: (volume: number) => void
   readonly onOutputChannelEnabledChange: (channelIndex: 0 | 1, enabled: boolean) => void
@@ -172,6 +177,7 @@ export function FilterLab({
   buffer,
   currentSample,
   playing,
+  previewMode,
   sampleRate,
   outputSampleRate,
   spectrum,
@@ -184,6 +190,7 @@ export function FilterLab({
   getFilterFrequencyResponseDb,
   onFiltersChange,
   onAuditionModeChange,
+  onPreviewModeChange,
   onSeekSample,
   onVolumeChange,
   onOutputChannelEnabledChange,
@@ -977,11 +984,13 @@ export function FilterLab({
             filters={filters}
             auditionMode={auditionMode}
             playing={playing}
+            viewMode={previewMode}
             spectrum={spectrum}
             spectrogram={spectrogram}
             contextSampleRate={referenceSampleRate}
             getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
             onAuditionModeChange={onAuditionModeChange}
+            onViewModeChange={onPreviewModeChange}
             onSeekSample={onSeekSample}
           />
         </section>
