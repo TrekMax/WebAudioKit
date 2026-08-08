@@ -2,6 +2,22 @@
 
 WebAudioKit 是一个本地优先、非破坏式的浏览器音频分析工作台。音频默认只在当前浏览器中解码、播放、分析和导出，不上传到服务器。
 
+## 界面预览
+
+### 音频分析工作台
+
+![WebAudioKit 双声道波形与二维声谱分析界面](docs/assets/webaudiokit-analysis-preview.png)
+
+### 滤波节点工作台
+
+![WebAudioKit 串行滤波节点与 A/B 频谱试听界面](docs/assets/webaudiokit-filter-lab-preview.png)
+
+### 节点说明与效果图例
+
+![WebAudioKit 低通节点说明悬浮面板与处理前后二维频谱图例](docs/assets/webaudiokit-filter-node-guide-preview.png)
+
+> 示例音频：周杰伦《稻香》。音频仅用于生成界面预览，未包含在本仓库中。
+
 ## 当前能力
 
 - 拖拽或批量导入浏览器可解码的音频，WAV 为基线格式
