@@ -28,9 +28,6 @@ import type { ResolvedTheme } from '../theme'
 import {
   MIN_TRACK_LANE_HEIGHT,
   buildTrackPreviewAxes,
-  buildTrackOverviewRange,
-  buildTrackResamplerOverviewRange,
-  buildTrackSpectrogramPixels,
   createTrackTimeViewport,
   defaultTrackLaneHeight,
   maximumTrackLaneHeight,
@@ -40,9 +37,16 @@ import {
   trackTimeViewportSampleAtPosition,
   type TrackPreviewAxes,
   type TrackOverview,
+  type TrackSpectrogramPixels,
   type TrackTimeViewport,
   zoomTrackTimeViewport,
 } from '../visualization/trackPreview'
+import {
+  getCachedTrackFrequencyResponse,
+  getCachedTrackOverviewRange,
+  getCachedTrackResamplerOverviewRange,
+  getCachedTrackSpectrogramPixels,
+} from '../visualization/trackPreviewCache'
 
 interface FilterTrackPreviewProps {
   readonly buffer: AudioBuffer | null
@@ -95,6 +99,7 @@ interface TrackLaneProps {
   readonly spectrum: StftPreviewResult | null
   readonly spectrogram: StftPreviewResult | null
   readonly spectrogramResponseDb: Float32Array | null
+  readonly spectrogramResponseRevision: string | null
   readonly timeViewport: TrackTimeViewport
   readonly minimumTimeSpanSamples: number
   readonly getFilterFrequencyResponseDb: (frequenciesHz: Float32Array) => Float32Array | null
@@ -110,6 +115,10 @@ const TRACK_PLOT_MARGIN = {
   left: 176,
 } as const
 const TRACK_WAVEFORM_SAMPLES_PER_COLUMN = 8
+const TRACK_SPECTROGRAM_BITMAP_CACHE = new WeakMap<
+  TrackSpectrogramPixels,
+  HTMLCanvasElement
+>()
 
 interface TrackPlotBounds {
   readonly left: number
@@ -132,6 +141,23 @@ interface TrackCanvasPalette {
   readonly activePlayhead: string
   readonly inactivePlayhead: string
   readonly emptyText: string
+}
+
+function getTrackSpectrogramBitmap(
+  raster: TrackSpectrogramPixels,
+): HTMLCanvasElement | null {
+  const cached = TRACK_SPECTROGRAM_BITMAP_CACHE.get(raster)
+  if (cached) return cached
+  const offscreen = document.createElement('canvas')
+  offscreen.width = raster.width
+  offscreen.height = raster.height
+  const context = offscreen.getContext('2d')
+  if (!context) return null
+  const image = context.createImageData(raster.width, raster.height)
+  image.data.set(raster.pixels)
+  context.putImageData(image, 0, 0)
+  TRACK_SPECTROGRAM_BITMAP_CACHE.set(raster, offscreen)
+  return offscreen
 }
 
 const TRACK_CANVAS_PALETTES: Readonly<Record<ResolvedTheme, TrackCanvasPalette>> = {
@@ -291,6 +317,7 @@ function TrackLane({
   spectrum,
   spectrogram,
   spectrogramResponseDb,
+  spectrogramResponseRevision,
   timeViewport,
   minimumTimeSpanSamples,
   getFilterFrequencyResponseDb,
@@ -307,21 +334,20 @@ function TrackLane({
     : null
   const spectrogramBitmap = useMemo(() => {
     if (viewMode !== 'spectrogram' || !spectrogram) return null
-    const raster = buildTrackSpectrogramPixels(
+    const raster = getCachedTrackSpectrogramPixels(
       spectrogram,
       mode === 'filtered' ? spectrogramResponseDb : null,
+      mode === 'filtered' ? spectrogramResponseRevision : null,
     )
     if (!raster) return null
-    const offscreen = document.createElement('canvas')
-    offscreen.width = raster.width
-    offscreen.height = raster.height
-    const context = offscreen.getContext('2d')
-    if (!context) return null
-    const image = context.createImageData(raster.width, raster.height)
-    image.data.set(raster.pixels)
-    context.putImageData(image, 0, 0)
-    return offscreen
-  }, [mode, spectrogram, spectrogramResponseDb, viewMode])
+    return getTrackSpectrogramBitmap(raster)
+  }, [
+    mode,
+    spectrogram,
+    spectrogramResponseDb,
+    spectrogramResponseRevision,
+    viewMode,
+  ])
 
   useEffect(() => {
     const canvas = staticCanvasRef.current
@@ -644,7 +670,10 @@ export function FilterTrackPreview({
         spectrogram.hopSize * 2 * (sampleRate / spectrogram.sampleRate),
       ))
     : 64
-  const activeFilters = filters.filter((filter) => filter.enabled)
+  const activeFilters = useMemo(
+    () => filters.filter((filter) => filter.enabled),
+    [filters],
+  )
   const previewChannels = useMemo(() => (
     buffer
       ? Array.from(
@@ -672,7 +701,8 @@ export function FilterTrackPreview({
   }), [columns])
   const sourceOverview = useMemo(() => {
     if (!buffer || viewMode !== 'waveform') return emptyOverview
-    return buildTrackOverviewRange(
+    return getCachedTrackOverviewRange(
+      buffer,
       previewChannels,
       columns,
       { start: timeViewport.startSample, end: timeViewport.endSample },
@@ -681,7 +711,8 @@ export function FilterTrackPreview({
   }, [buffer, columns, emptyOverview, previewChannels, timeViewport, viewMode])
   const filteredOverview = useMemo(() => {
     if (!buffer || viewMode !== 'waveform' || !waveformResampler) return sourceOverview
-    return buildTrackResamplerOverviewRange(
+    return getCachedTrackResamplerOverviewRange(
+      buffer,
       previewChannels,
       columns,
       { start: timeViewport.startSample, end: timeViewport.endSample },
@@ -713,12 +744,26 @@ export function FilterTrackPreview({
   const spectrumRange = maximumFrequencyHz >= 1_000
     ? `20 Hz–${Number((maximumFrequencyHz / 1_000).toFixed(1))} kHz`
     : `0–${Math.round(maximumFrequencyHz)} Hz`
-  const filterResponseRevision = JSON.stringify(filters)
+  const filterConfigurationRevision = useMemo(
+    () => JSON.stringify(filters),
+    [filters],
+  )
+  const spectrogramResponseRevision = `${contextSampleRate}:${filterConfigurationRevision}`
   const spectrogramResponseDb = useMemo(() => (
-    spectrogram && filterResponseRevision.length > 2
-      ? getFilterFrequencyResponseDb(Float32Array.from(spectrogram.frequenciesHz))
+    viewMode === 'spectrogram' && spectrogram && activeFilters.length > 0
+      ? getCachedTrackFrequencyResponse(
+          spectrogram,
+          spectrogramResponseRevision,
+          () => getFilterFrequencyResponseDb(Float32Array.from(spectrogram.frequenciesHz)),
+        )
       : null
-  ), [filterResponseRevision, getFilterFrequencyResponseDb, spectrogram])
+  ), [
+    activeFilters.length,
+    getFilterFrequencyResponseDb,
+    spectrogram,
+    spectrogramResponseRevision,
+    viewMode,
+  ])
   const previewIcon = viewMode === 'waveform'
     ? <AudioWaveform size={14} />
     : viewMode === 'spectrum'
@@ -861,6 +906,7 @@ export function FilterTrackPreview({
           spectrum={spectrum}
           spectrogram={spectrogram}
           spectrogramResponseDb={null}
+          spectrogramResponseRevision={null}
           timeViewport={timeViewport}
           minimumTimeSpanSamples={minimumTimeSpanSamples}
           getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
@@ -891,6 +937,7 @@ export function FilterTrackPreview({
           spectrum={spectrum}
           spectrogram={spectrogram}
           spectrogramResponseDb={spectrogramResponseDb}
+          spectrogramResponseRevision={spectrogramResponseRevision}
           timeViewport={timeViewport}
           minimumTimeSpanSamples={minimumTimeSpanSamples}
           getFilterFrequencyResponseDb={getFilterFrequencyResponseDb}
