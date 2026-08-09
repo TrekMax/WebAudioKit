@@ -75,13 +75,15 @@ describe('resampler AudioWorklet processor', () => {
     expect(Math.max(...downsampled.map(Math.abs))).toBeLessThan(0.5)
 
     const ramp = Float32Array.from({ length: 128 }, (_, index) => index / 127)
-    const upsampled = new Float32Array(ramp.length)
-    processor.process(
-      [[ramp]],
-      [[upsampled]],
-      { targetSampleRateHz: new Float32Array([96_000]) },
-    )
-    expect(upsampled).toEqual(ramp)
+    for (const algorithm of ['hold', 'linear', 'cubic', 'sinc']) {
+      const upsampled = new Float32Array(ramp.length)
+      new Processor({ processorOptions: { algorithm } }).process(
+        [[ramp]],
+        [[upsampled]],
+        { targetSampleRateHz: new Float32Array([96_000]) },
+      )
+      expect(upsampled).toEqual(ramp)
+    }
   })
 
   it('offers a smoother causal linear reconstruction than zero-order hold', async () => {
@@ -128,5 +130,57 @@ describe('resampler AudioWorklet processor', () => {
     expect(secondOutput[1]?.every(Number.isFinite)).toBe(true)
     expect(secondOutput[0]?.[64]).toBeGreaterThan(0)
     expect(secondOutput[1]?.[64]).toBeLessThan(0)
+  })
+
+  it('provides finite and distinct cubic and windowed-sinc reconstruction', async () => {
+    const Processor = await loadProcessor()
+    const input = Float32Array.from(
+      { length: 256 },
+      (_, index) => 0.65 * Math.sin(index * 0.11) + 0.25 * Math.sin(index * 0.37),
+    )
+    const parameters = { targetSampleRateHz: new Float32Array([12_000]) }
+    const linear = new Float32Array(input.length)
+    const cubic = new Float32Array(input.length)
+    const sinc = new Float32Array(input.length)
+
+    new Processor({ processorOptions: { algorithm: 'linear' } }).process(
+      [[input]],
+      [[linear]],
+      parameters,
+    )
+    new Processor({ processorOptions: { algorithm: 'cubic' } }).process(
+      [[input]],
+      [[cubic]],
+      parameters,
+    )
+    new Processor({ processorOptions: { algorithm: 'sinc' } }).process(
+      [[input]],
+      [[sinc]],
+      parameters,
+    )
+
+    expect(cubic).not.toEqual(linear)
+    expect(sinc).not.toEqual(cubic)
+    expect(cubic.every(Number.isFinite)).toBe(true)
+    expect(sinc.every(Number.isFinite)).toBe(true)
+    expect(changingStepCount(cubic)).toBeGreaterThan(changingStepCount(new Float32Array(input.length)))
+    expect(changingStepCount(sinc)).toBeGreaterThan(changingStepCount(new Float32Array(input.length)))
+  })
+
+  it.each(['cubic', 'sinc'])('keeps %s state continuous across render quanta', async (algorithm) => {
+    const Processor = await loadProcessor()
+    const processor = new Processor({ processorOptions: { algorithm } })
+    const first = Float32Array.from({ length: 128 }, (_, index) => Math.sin(index * 0.08))
+    const second = Float32Array.from({ length: 128 }, (_, index) => Math.sin((index + 128) * 0.08))
+    const firstOutput = new Float32Array(128)
+    const secondOutput = new Float32Array(128)
+    const parameters = { targetSampleRateHz: new Float32Array([11_025]) }
+
+    processor.process([[first]], [[firstOutput]], parameters)
+    processor.process([[second]], [[secondOutput]], parameters)
+
+    const boundaryStep = Math.abs((secondOutput[0] ?? 0) - (firstOutput[127] ?? 0))
+    expect(boundaryStep).toBeLessThan(0.5)
+    expect(secondOutput.every(Number.isFinite)).toBe(true)
   })
 })

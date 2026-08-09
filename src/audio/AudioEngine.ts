@@ -645,9 +645,11 @@ export class AudioEngine {
           1 + feedback * feedback - 2 * feedback * Math.cos(omega),
         )
         const filterMagnitude = alpha / Math.max(denominator, 1e-12)
-        const reconstructionMagnitude = filter.resamplingAlgorithm === 'linear'
-          ? linearHoldMagnitude(frequencyHz, targetSampleRateHz)
-          : 1
+        const reconstructionMagnitude = resamplerReconstructionMagnitude(
+          filter.resamplingAlgorithm,
+          frequencyHz,
+          targetSampleRateHz,
+        )
         responseDb[index] = (responseDb[index] ?? 0)
           + 20 * Math.log10(Math.max(filterMagnitude * reconstructionMagnitude, 1e-12))
       }
@@ -1137,6 +1139,56 @@ function linearHoldMagnitude(frequencyHz: number, targetSampleRateHz: number): n
   const normalizedFrequency = Math.PI * frequencyHz / targetSampleRateHz
   const sinc = Math.sin(normalizedFrequency) / normalizedFrequency
   return sinc * sinc
+}
+
+function resamplerReconstructionMagnitude(
+  algorithm: FilterNodeConfig['resamplingAlgorithm'],
+  frequencyHz: number,
+  targetSampleRateHz: number,
+): number {
+  if (algorithm === 'linear') {
+    return linearHoldMagnitude(frequencyHz, targetSampleRateHz)
+  }
+  if (algorithm === 'cubic') {
+    return cubicInterpolationMagnitude(frequencyHz, targetSampleRateHz)
+  }
+  if (algorithm === 'sinc') {
+    const passbandHz = targetSampleRateHz * 0.45
+    const stopbandHz = targetSampleRateHz * 0.5
+    if (frequencyHz <= passbandHz) return 1
+    if (frequencyHz >= stopbandHz) return 1e-6
+    const phase = (frequencyHz - passbandHz) / (stopbandHz - passbandHz)
+    return 0.5 + 0.5 * Math.cos(Math.PI * phase)
+  }
+  return 1
+}
+
+function cubicInterpolationMagnitude(
+  frequencyHz: number,
+  targetSampleRateHz: number,
+): number {
+  if (frequencyHz === 0) return 1
+  const omega = 2 * Math.PI * frequencyHz / targetSampleRateHz
+  const phaseCount = 16
+  let magnitudeSum = 0
+  for (let phaseIndex = 0; phaseIndex < phaseCount; phaseIndex += 1) {
+    const phase = phaseIndex / phaseCount
+    const phaseSquared = phase * phase
+    const phaseCubed = phaseSquared * phase
+    const weight0 = -0.5 * phase + phaseSquared - 0.5 * phaseCubed
+    const weight1 = 1 - 2.5 * phaseSquared + 1.5 * phaseCubed
+    const weight2 = 0.5 * phase + 2 * phaseSquared - 1.5 * phaseCubed
+    const weight3 = -0.5 * phaseSquared + 0.5 * phaseCubed
+    const real = weight0 * Math.cos(omega * 3)
+      + weight1 * Math.cos(omega * 2)
+      + weight2 * Math.cos(omega)
+      + weight3
+    const imaginary = -weight0 * Math.sin(omega * 3)
+      - weight1 * Math.sin(omega * 2)
+      - weight2 * Math.sin(omega)
+    magnitudeSum += Math.hypot(real, imaginary)
+  }
+  return magnitudeSum / phaseCount
 }
 
 function resolveLoadArguments(

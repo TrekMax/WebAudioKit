@@ -103,8 +103,8 @@ export const FILTER_NODE_GUIDES: Readonly<Record<FilterKind, FilterNodeGuideCopy
   },
   resampler: {
     visualKind: 'waveform',
-    introduction: '在监听链中模拟目标采样率。下采样会先限制高频以避免混叠，再选择复古保持或线性平滑方式重建；上采样不会创造源信号中不存在的高频信息。',
-    parameterSummary: '复古保持采用一阶抗混叠与零阶保持，实时成本低，颗粒和阶梯感明显并作为默认值；线性平滑采用一阶抗混叠与抽取后线性插值，同为低成本模式，听感更平滑，但失真、高频衰减与最多一个模拟采样间隔的延迟仍然存在。',
+    introduction: '在固定采样率的监听链中模拟较低目标采样率，再以保持、线性、三次或带限方式重建。目标采样率不低于输出上下文时透明直通，不会生成新的 PCM 帧或高频信息。',
+    parameterSummary: '复古保持成本最低且阶梯感明显；线性平滑减少跳变；三次平滑用四点 Catmull–Rom 改善连续性；带限重建用 128 相位 16 抽头窗化 sinc 提供最平直的通带，但实时成本与因果延迟最高。四种模式均先经过一阶抗混叠。',
     visualSummary: '示例按较低目标采样率重建波形，高频细节被抗混叠处理抑制。',
   },
 }

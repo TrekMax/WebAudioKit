@@ -53,6 +53,10 @@ import {
   nodeOrdersEqual,
   reorderNodeIds,
 } from './filterNodeDrag'
+import {
+  RESAMPLING_ALGORITHM_OPTIONS,
+  resolveResamplingMode,
+} from './resamplingAlgorithmOptions'
 
 interface FilterLabProps {
   readonly filters: readonly FilterNodeConfig[]
@@ -92,31 +96,6 @@ interface FilterLabProps {
 }
 
 const FILTER_TYPES = Object.keys(FILTER_DEFINITIONS) as FilterKind[]
-const RESAMPLING_ALGORITHM_OPTIONS: readonly {
-  readonly value: ResamplingAlgorithm
-  readonly label: string
-  readonly algorithm: string
-  readonly listeningCharacter: string
-  readonly realtimeCost: string
-  readonly recommendation: string
-}[] = [
-  {
-    value: 'hold',
-    label: '复古保持',
-    algorithm: '一阶抗混叠 + 零阶保持',
-    listeningCharacter: '颗粒感和阶梯感明显，高频细节会随目标采样率下降而减少。',
-    realtimeCost: '低',
-    recommendation: '保留当前实现并作为默认值，适合复古采样质感和低成本实时试听。',
-  },
-  {
-    value: 'linear',
-    label: '线性平滑',
-    algorithm: '一阶抗混叠 + 抽取后线性插值',
-    listeningCharacter: '重建更平滑，但失真和高频衰减仍可听见，并带有一个模拟采样间隔的延迟。',
-    realtimeCost: '低',
-    recommendation: '第一阶段加入，适合希望减少阶梯感、同时保持较低实时成本的监听场景。',
-  },
-]
 const FLOATING_INSPECTOR_GAP = 12
 const FLOATING_INSPECTOR_WIDTH = 420
 const PALETTE_GUIDE_WIDTH = 420
@@ -258,12 +237,9 @@ export function FilterLab({
   const presetFitsNodeLimit = filters.length + selectedPreset.nodes.length <= MAX_FILTER_NODES
   const referenceSampleRate = outputSampleRate ?? sampleRate ?? 48_000
   const resamplingMode = selected?.type === 'resampler'
-    ? selected.targetSampleRateHz < referenceSampleRate
-      ? '下采样'
-      : selected.targetSampleRateHz > referenceSampleRate
-        ? '上采样'
-        : '等采样率'
+    ? resolveResamplingMode(selected.targetSampleRateHz, referenceSampleRate)
     : null
+  const resamplingActive = resamplingMode?.active ?? false
   const selectedResamplingAlgorithm = selected?.type === 'resampler'
     ? RESAMPLING_ALGORITHM_OPTIONS.find(({ value }) => value === selected.resamplingAlgorithm)
     : null
@@ -1032,12 +1008,15 @@ export function FilterLab({
                 <>
                   <div className="resampler-mode-card">
                     <Gauge size={16} />
-                    <span><strong>{resamplingMode}</strong><small>源 {formatFrequency(referenceSampleRate)} → 目标 {formatFrequency(selected.targetSampleRateHz)}</small></span>
+                    <span><strong>{resamplingMode?.label}</strong><small>{resamplingActive
+                      ? `输出 ${formatFrequency(referenceSampleRate)} · 模拟目标 ${formatFrequency(selected.targetSampleRateHz)}`
+                      : `目标 ${formatFrequency(selected.targetSampleRateHz)} ≥ 输出 ${formatFrequency(referenceSampleRate)}，PCM 帧率不变`}</small></span>
                   </div>
                   <label className="filter-field resampler-algorithm-field">
                     <span>重采样算法</span>
                     <select
                       value={selected.resamplingAlgorithm}
+                      disabled={!resamplingActive}
                       onChange={(event) => updateSelected({
                         resamplingAlgorithm: event.target.value as ResamplingAlgorithm,
                       })}
@@ -1107,7 +1086,7 @@ export function FilterLab({
               </div>
 
               <p className="filter-runtime-note">{selected.type === 'resampler'
-                ? '复古保持与线性平滑都先执行实时抗混叠；算法仅在目标采样率低于输出上下文时产生差异。上采样不会生成新的频率信息，不支持 AudioWorklet 时节点透明旁路。'
+                ? '四种算法仅在模拟目标采样率低于输出上下文时参与重建；目标不低于上下文时固定采样率 AudioWorklet 透明直通，不会生成新的 PCM 帧或高频信息。带限重建使用固定抽头与预计算相位表，不支持 AudioWorklet 时节点透明旁路。'
                 : selected.type === 'equalizer'
                   ? `${selected.eqBandCount} 段 EQ 编译为串联的原生 Peaking Biquad；切换段数会重建当前 EQ 分组，但不会重启播放。`
                   : `当前 Nyquist：${formatFrequency(nyquist)}。超出当前设备范围的频率会由 Web Audio 安全钳位。`}</p>

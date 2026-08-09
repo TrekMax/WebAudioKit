@@ -5,6 +5,7 @@ import {
   EQ_BAND_COUNTS,
   EQ_BAND_PRESETS,
   FILTER_DEFINITIONS,
+  RESAMPLING_ALGORITHMS,
   cloneFilterNodeConfig,
   compileFilterChain,
   createFilterNodeConfig,
@@ -68,6 +69,7 @@ describe('filter graph compiler', () => {
       targetSampleRateHz: 24_000,
       resamplingAlgorithm: 'hold',
     })
+    expect(RESAMPLING_ALGORITHMS).toEqual(['hold', 'linear', 'cubic', 'sinc'])
     const equalizer = createFilterNodeConfig('equalizer', 'eq')
     expect(equalizer.eqBandCount).toBe(DEFAULT_EQ_BAND_COUNT)
     expect(equalizer.eqGainsDb).toEqual(
@@ -177,7 +179,7 @@ describe('filter graph compiler', () => {
     }])).toThrow('sample rate')
     expect(() => validateFilterChain([{
       ...createFilterNodeConfig('resampler', 'rate'),
-      resamplingAlgorithm: 'cubic' as never,
+      resamplingAlgorithm: 'nearest' as never,
     }])).toThrow('algorithm')
     expect(() => validateFilterChain([{
       ...createFilterNodeConfig('equalizer', 'eq'),

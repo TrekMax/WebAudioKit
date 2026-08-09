@@ -614,23 +614,32 @@ describe('AudioEngine', () => {
     expect(response[3]).toBeLessThan(response[2] ?? 0)
   })
 
-  it('adds linear reconstruction rolloff to resampler spectrum previews', () => {
+  it('models reconstruction quality in resampler spectrum previews', () => {
     const holdEngine = createEngine(new FakeAudioContext())
     const linearEngine = createEngine(new FakeAudioContext())
+    const cubicEngine = createEngine(new FakeAudioContext())
+    const sincEngine = createEngine(new FakeAudioContext())
     const resampler = {
       ...createFilterNodeConfig('resampler', 'rate'),
       targetSampleRateHz: 12_000,
     }
     holdEngine.setFilterChain([resampler])
     linearEngine.setFilterChain([{ ...resampler, resamplingAlgorithm: 'linear' }])
+    cubicEngine.setFilterChain([{ ...resampler, resamplingAlgorithm: 'cubic' }])
+    sincEngine.setFilterChain([{ ...resampler, resamplingAlgorithm: 'sinc' }])
 
     const frequenciesHz = new Float32Array([0, 1_000, 5_000])
     const holdResponse = holdEngine.getFilterFrequencyResponseDb(frequenciesHz)
     const linearResponse = linearEngine.getFilterFrequencyResponseDb(frequenciesHz)
+    const cubicResponse = cubicEngine.getFilterFrequencyResponseDb(frequenciesHz)
+    const sincResponse = sincEngine.getFilterFrequencyResponseDb(frequenciesHz)
 
     expect(linearResponse[0]).toBeCloseTo(holdResponse[0] ?? 0, 5)
     expect(linearResponse[1]).toBeLessThan(holdResponse[1] ?? 0)
     expect(linearResponse[2]).toBeLessThan(holdResponse[2] ?? 0)
+    expect(cubicResponse[0]).toBeCloseTo(holdResponse[0] ?? 0, 5)
+    expect(cubicResponse[2]).toBeGreaterThan(linearResponse[2] ?? 0)
+    expect(sincResponse[2]).toBeGreaterThanOrEqual(cubicResponse[2] ?? 0)
   })
 
   it('rebuilds the resampler route when its reconstruction algorithm changes', () => {

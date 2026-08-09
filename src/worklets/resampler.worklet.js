@@ -4,6 +4,48 @@ const PROCESSOR_NAME = 'webaudio-kit-resampler'
 const MAX_CHANNELS = 32
 const MIN_TARGET_SAMPLE_RATE = 3_000
 const MAX_TARGET_SAMPLE_RATE = 192_000
+const SINC_TAPS = 16
+const SINC_PHASES = 128
+const SINC_DELAY_SAMPLES = SINC_TAPS / 2
+
+function normalizedSinc(value) {
+  if (Math.abs(value) < 1e-12) return 1
+  const radians = Math.PI * value
+  return Math.sin(radians) / radians
+}
+
+function buildWindowedSincTable() {
+  const table = new Float32Array(SINC_PHASES * SINC_TAPS)
+  for (let phaseIndex = 0; phaseIndex < SINC_PHASES; phaseIndex += 1) {
+    const phase = phaseIndex / SINC_PHASES
+    const offset = phaseIndex * SINC_TAPS
+    let sum = 0
+    for (let tap = 0; tap < SINC_TAPS; tap += 1) {
+      const distance = tap - SINC_DELAY_SAMPLES + phase
+      const coefficient = Math.abs(distance) >= SINC_DELAY_SAMPLES
+        ? 0
+        : normalizedSinc(distance) * normalizedSinc(distance / SINC_DELAY_SAMPLES)
+      table[offset + tap] = coefficient
+      sum += coefficient
+    }
+    const normalization = Math.abs(sum) > 1e-12 ? 1 / sum : 1
+    for (let tap = 0; tap < SINC_TAPS; tap += 1) {
+      table[offset + tap] *= normalization
+    }
+  }
+  return table
+}
+
+function catmullRom(p0, p1, p2, p3, phase) {
+  const phaseSquared = phase * phase
+  const phaseCubed = phaseSquared * phase
+  return 0.5 * (
+    2 * p1
+    + (-p0 + p2) * phase
+    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * phaseSquared
+    + (-p0 + 3 * p1 - 3 * p2 + p3) * phaseCubed
+  )
+}
 
 class ResamplerProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
@@ -18,12 +60,17 @@ class ResamplerProcessor extends AudioWorkletProcessor {
 
   constructor(options = {}) {
     super()
-    this.algorithm = options.processorOptions?.algorithm === 'linear' ? 'linear' : 'hold'
+    const requestedAlgorithm = options.processorOptions?.algorithm
+    this.algorithm = requestedAlgorithm === 'linear'
+      || requestedAlgorithm === 'cubic'
+      || requestedAlgorithm === 'sinc'
+      ? requestedAlgorithm
+      : 'hold'
     this.phase = new Float64Array(MAX_CHANNELS)
     this.filtered = new Float32Array(MAX_CHANNELS)
-    this.previous = new Float32Array(MAX_CHANNELS)
-    this.held = new Float32Array(MAX_CHANNELS)
+    this.history = new Float32Array(MAX_CHANNELS * SINC_TAPS)
     this.initialized = new Uint8Array(MAX_CHANNELS)
+    this.sincTable = this.algorithm === 'sinc' ? buildWindowedSincTable() : null
   }
 
   process(inputs, outputs, parameters) {
@@ -55,8 +102,10 @@ class ResamplerProcessor extends AudioWorkletProcessor {
           const lastSample = input[input.length - 1] || 0
           this.phase[channel] = 0
           this.filtered[channel] = lastSample
-          this.previous[channel] = lastSample
-          this.held[channel] = lastSample
+          const historyOffset = channel * SINC_TAPS
+          for (let tap = 0; tap < SINC_TAPS; tap += 1) {
+            this.history[historyOffset + tap] = lastSample
+          }
           this.initialized[channel] = 1
         }
         continue
@@ -64,31 +113,55 @@ class ResamplerProcessor extends AudioWorkletProcessor {
 
       let phase = this.phase[channel]
       let filtered = this.filtered[channel]
-      let previous = this.previous[channel]
-      let held = this.held[channel]
       let initialized = this.initialized[channel]
+      const historyOffset = channel * SINC_TAPS
       for (let frame = 0; frame < output.length; frame += 1) {
         const sample = input[frame] || 0
         filtered += lowpassAlpha * (sample - filtered)
         phase += ratio
         if (!initialized) {
           phase -= Math.floor(phase)
-          held = filtered
-          previous = filtered
+          for (let tap = 0; tap < SINC_TAPS; tap += 1) {
+            this.history[historyOffset + tap] = filtered
+          }
           initialized = 1
         } else if (phase >= 1) {
           phase -= Math.floor(phase)
-          previous = held
-          held = filtered
+          for (let tap = SINC_TAPS - 1; tap > 0; tap -= 1) {
+            this.history[historyOffset + tap] = this.history[historyOffset + tap - 1]
+          }
+          this.history[historyOffset] = filtered
         }
-        output[frame] = this.algorithm === 'linear'
-          ? previous + (held - previous) * phase
-          : held
+        const held = this.history[historyOffset]
+        if (this.algorithm === 'linear') {
+          const previous = this.history[historyOffset + 1]
+          output[frame] = previous + (held - previous) * phase
+        } else if (this.algorithm === 'cubic') {
+          output[frame] = catmullRom(
+            this.history[historyOffset + 3],
+            this.history[historyOffset + 2],
+            this.history[historyOffset + 1],
+            held,
+            phase,
+          )
+        } else if (this.algorithm === 'sinc' && this.sincTable) {
+          const phaseIndex = Math.min(
+            SINC_PHASES - 1,
+            Math.floor(phase * SINC_PHASES),
+          )
+          const coefficientOffset = phaseIndex * SINC_TAPS
+          let reconstructed = 0
+          for (let tap = 0; tap < SINC_TAPS; tap += 1) {
+            reconstructed += this.history[historyOffset + tap]
+              * this.sincTable[coefficientOffset + tap]
+          }
+          output[frame] = reconstructed
+        } else {
+          output[frame] = held
+        }
       }
       this.phase[channel] = phase
       this.filtered[channel] = filtered
-      this.previous[channel] = previous
-      this.held[channel] = held
       this.initialized[channel] = initialized
     }
     return true

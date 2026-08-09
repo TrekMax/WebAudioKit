@@ -45,6 +45,14 @@ describe('track preview cache', () => {
       config,
       4,
     )).toBe(filtered)
+    expect(getCachedTrackResamplerOverviewRange(
+      sourceIdentity,
+      channels,
+      16,
+      range,
+      { ...config, algorithm: 'cubic' },
+      4,
+    )).not.toBe(filtered)
     expect(filtered).not.toBe(source)
   })
 

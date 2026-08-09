@@ -1,5 +1,8 @@
 import type { StftPreviewResult } from '../audio/analysis'
-import type { ResamplingAlgorithm } from '../audio/filterGraph'
+import {
+  isResamplingAlgorithm,
+  type ResamplingAlgorithm,
+} from '../audio/filterGraph'
 import { normalizeDb, spectrumColor } from './colorMap'
 
 const MAX_PREVIEW_CHANNELS = 2
@@ -10,6 +13,8 @@ const TRACK_PREVIEW_CHROME_HEIGHT = 72
 const MAX_TRACK_SPECTROGRAM_WIDTH = 1_024
 const MAX_TRACK_SPECTROGRAM_HEIGHT = 384
 const MAX_RESAMPLER_PREVIEW_WARMUP_SAMPLES = 64
+const RESAMPLER_SINC_TAPS = 16
+const RESAMPLER_SINC_DELAY_SAMPLES = RESAMPLER_SINC_TAPS / 2
 
 export const MIN_TRACK_LANE_HEIGHT = 56
 
@@ -548,7 +553,7 @@ export function buildTrackResamplerOverviewRange(
   ) {
     throw new RangeError('Track resampler preview sample rates must be positive and finite')
   }
-  if (config.algorithm !== 'hold' && config.algorithm !== 'linear') {
+  if (!isResamplingAlgorithm(config.algorithm)) {
     throw new RangeError(`Unsupported track resampler preview algorithm: ${String(config.algorithm)}`)
   }
   if (config.targetSampleRateHz >= config.contextSampleRateHz) {
@@ -617,7 +622,35 @@ export function buildTrackResamplerOverviewRange(
     if (config.algorithm === 'hold') return current
     const previous = filteredSampleAt(channelIndex, eventSampleIndex(currentStep - 1))
     const phase = phasePosition - currentStep
-    return previous + (current - previous) * phase
+    if (config.algorithm === 'linear') {
+      return previous + (current - previous) * phase
+    }
+    if (config.algorithm === 'cubic') {
+      const p0 = filteredSampleAt(channelIndex, eventSampleIndex(currentStep - 3))
+      const p1 = filteredSampleAt(channelIndex, eventSampleIndex(currentStep - 2))
+      return catmullRom(
+        p0,
+        p1,
+        previous,
+        current,
+        phase,
+      )
+    }
+
+    let reconstructed = 0
+    let coefficientSum = 0
+    for (let tap = 0; tap < RESAMPLER_SINC_TAPS; tap += 1) {
+      const distance = tap - RESAMPLER_SINC_DELAY_SAMPLES + phase
+      if (Math.abs(distance) >= RESAMPLER_SINC_DELAY_SAMPLES) continue
+      const coefficient = normalizedSinc(distance)
+        * normalizedSinc(distance / RESAMPLER_SINC_DELAY_SAMPLES)
+      reconstructed += filteredSampleAt(
+        channelIndex,
+        eventSampleIndex(currentStep - tap),
+      ) * coefficient
+      coefficientSum += coefficient
+    }
+    return reconstructed / (Math.abs(coefficientSum) > 1e-12 ? coefficientSum : 1)
   }
 
   return buildTrackOverviewFromAccessor(
@@ -626,6 +659,29 @@ export function buildTrackResamplerOverviewRange(
     range,
     samplesPerColumn,
     sampleAt,
+  )
+}
+
+function normalizedSinc(value: number): number {
+  if (Math.abs(value) < 1e-12) return 1
+  const radians = Math.PI * value
+  return Math.sin(radians) / radians
+}
+
+function catmullRom(
+  p0: number,
+  p1: number,
+  p2: number,
+  p3: number,
+  phase: number,
+): number {
+  const phaseSquared = phase * phase
+  const phaseCubed = phaseSquared * phase
+  return 0.5 * (
+    2 * p1
+    + (-p0 + p2) * phase
+    + (2 * p0 - 5 * p1 + 4 * p2 - p3) * phaseSquared
+    + (-p0 + 3 * p1 - 3 * p2 + p3) * phaseCubed
   )
 }
 

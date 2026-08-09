@@ -130,6 +130,35 @@ describe('buildTrackOverview', () => {
     expect(Math.max(...visibleOnly.maxs)).toBeLessThanOrEqual(0.100_001)
   })
 
+  it('approximates cubic and windowed-sinc sampler reconstruction', () => {
+    const source = Float32Array.from(
+      { length: 96 },
+      (_, index) => 0.6 * Math.sin(index * 0.17) + 0.3 * Math.sin(index * 0.41),
+    )
+    const build = (algorithm: 'linear' | 'cubic' | 'sinc') => buildTrackResamplerOverviewRange(
+      [source],
+      48,
+      { start: 0, end: 48 },
+      {
+        sourceSampleRateHz: 48_000,
+        contextSampleRateHz: 48_000,
+        targetSampleRateHz: 12_000,
+        algorithm,
+      },
+      1,
+    )
+    const linear = build('linear')
+    const cubic = build('cubic')
+    const sinc = build('sinc')
+
+    expect(cubic.maxs).not.toEqual(linear.maxs)
+    expect(sinc.maxs).not.toEqual(cubic.maxs)
+    expect(cubic.maxs.every(Number.isFinite)).toBe(true)
+    expect(cubic.mins.every(Number.isFinite)).toBe(true)
+    expect(sinc.maxs.every(Number.isFinite)).toBe(true)
+    expect(sinc.mins.every(Number.isFinite)).toBe(true)
+  })
+
   it('keeps transparent sampler previews identical and rejects invalid algorithms', () => {
     const channels = [Float32Array.from([0, 0.25, -0.5, 1])]
     const source = buildTrackOverviewRange(channels, 4, { start: 0, end: 4 }, 1)
@@ -168,7 +197,7 @@ describe('buildTrackOverview', () => {
         sourceSampleRateHz: 48_000,
         contextSampleRateHz: 48_000,
         targetSampleRateHz: 8_000,
-        algorithm: 'cubic' as never,
+        algorithm: 'nearest' as never,
       },
     )).toThrow('algorithm')
   })

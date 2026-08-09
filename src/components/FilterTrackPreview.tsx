@@ -47,6 +47,7 @@ import {
   getCachedTrackResamplerOverviewRange,
   getCachedTrackSpectrogramPixels,
 } from '../visualization/trackPreviewCache'
+import { resamplingAlgorithmLabel } from './resamplingAlgorithmOptions'
 
 interface FilterTrackPreviewProps {
   readonly buffer: AudioBuffer | null
@@ -738,7 +739,7 @@ export function FilterTrackPreview({
     ? activeFilters.slice(0, 3).map((filter) => FILTER_DEFINITIONS[filter.type].label).join(' → ')
     : '没有活动处理节点'
   const waveformFilterSummary = waveformResampler
-    ? `采样器时域预览 · ${formatPreviewSampleRate(waveformResampler.targetSampleRateHz)} · ${waveformResampler.resamplingAlgorithm === 'linear' ? '线性平滑' : '复古保持'}`
+    ? `采样器时域预览 · ${formatPreviewSampleRate(waveformResampler.targetSampleRateHz)} · ${resamplingAlgorithmLabel(waveformResampler.resamplingAlgorithm)}`
     : filterSummary
   const maximumFrequencyHz = spectrum?.frequenciesHz.at(-1) ?? 0
   const spectrumRange = maximumFrequencyHz >= 1_000
