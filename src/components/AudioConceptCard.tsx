@@ -57,6 +57,76 @@ function NyquistDiagram() {
   )
 }
 
+function CubicInterpolationDiagram() {
+  const samples = [
+    { x: 45, y: 105, label: 'P0' },
+    { x: 130, y: 82, label: 'P1' },
+    { x: 230, y: 40, label: 'P2' },
+    { x: 315, y: 70, label: 'P3' },
+  ] as const
+  return (
+    <svg viewBox="0 0 360 150" role="img" aria-label="四点 Catmull–Rom 三次曲线与线性插值对比示意图">
+      <line className="audio-concept-axis-line" x1="24" x2="337" y1="124" y2="124" />
+      <line className="audio-concept-axis-line" x1="24" x2="24" y1="18" y2="124" />
+      <path className="audio-concept-feedback-line" d="M 130 82 L 230 40" />
+      <path className="audio-concept-envelope-line" d="M 130 82 C 161 71 199 42 230 40" />
+      {samples.map((sample) => (
+        <g key={sample.label}>
+          <line className="audio-concept-stage-line" x1={sample.x} x2={sample.x} y1={sample.y} y2="124" />
+          <circle className="audio-concept-node" cx={sample.x} cy={sample.y} r="4" />
+          <text className="audio-concept-axis-text center" x={sample.x} y={sample.y - 10}>{sample.label}</text>
+        </g>
+      ))}
+      <text className="audio-concept-zone-label safe" x="145" y="103">三次曲线</text>
+      <text className="audio-concept-feedback-label" x="176" y="52">线性连接</text>
+      <text className="audio-concept-axis-text" x="28" y="20">振幅</text>
+      <text className="audio-concept-axis-text center strong" x="180" y="142">分数采样位置 μ</text>
+    </svg>
+  )
+}
+
+function WindowedSincDiagram() {
+  const taps = [
+    { x: 30, y: 76 },
+    { x: 50, y: 72 },
+    { x: 70, y: 88 },
+    { x: 90, y: 72 },
+    { x: 110, y: 68 },
+    { x: 130, y: 96 },
+    { x: 150, y: 90 },
+    { x: 170, y: 34 },
+    { x: 190, y: 34 },
+    { x: 210, y: 90 },
+    { x: 230, y: 96 },
+    { x: 250, y: 68 },
+    { x: 270, y: 72 },
+    { x: 290, y: 88 },
+    { x: 310, y: 72 },
+    { x: 330, y: 76 },
+  ] as const
+  return (
+    <svg viewBox="0 0 360 150" role="img" aria-label="16 抽头窗化 sinc 重建核与分数相位示意图">
+      <rect className="audio-concept-window-box" x="24" y="17" width="312" height="108" rx="4" />
+      <line className="audio-concept-axis-line" x1="24" x2="336" y1="78" y2="78" />
+      <line className="audio-concept-center-line" x1="180" x2="180" y1="17" y2="125" />
+      <path
+        className="audio-concept-envelope-line"
+        d="M 28 78 C 38 70 46 70 54 78 C 65 91 73 91 83 78 C 95 61 106 61 116 78 C 130 104 143 104 155 78 C 164 50 171 20 180 20 C 189 20 196 50 205 78 C 217 104 230 104 244 78 C 254 61 265 61 277 78 C 287 91 296 91 307 78 C 316 70 326 70 334 78"
+      />
+      {taps.map((tap, index) => (
+        <g key={tap.x}>
+          <line className="audio-concept-stage-line" x1={tap.x} x2={tap.x} y1="78" y2={tap.y} />
+          <circle className="audio-concept-node" cx={tap.x} cy={tap.y} r="2.5" />
+          {index === 7 ? <text className="audio-concept-axis-text center" x={tap.x} y="15">相位 μ</text> : null}
+        </g>
+      ))}
+      <text className="audio-concept-zone-label safe" x="31" y="116">Lanczos 窗内核</text>
+      <text className="audio-concept-axis-text" x="27" y="142">16 TAPS</text>
+      <text className="audio-concept-axis-text" x="276" y="142">128 PHASES</text>
+    </svg>
+  )
+}
+
 function EnvelopeDiagram() {
   return (
     <svg viewBox="0 0 360 150" role="img" aria-label="ADSR 振幅包络四阶段示意图">
@@ -168,6 +238,8 @@ function FftStftDiagram() {
 function AudioConceptDiagram({ visualKind }: { readonly visualKind: AudioConceptVisualKind }) {
   if (visualKind === 'iir-flow') return <IirDiagram />
   if (visualKind === 'nyquist') return <NyquistDiagram />
+  if (visualKind === 'cubic-interpolation') return <CubicInterpolationDiagram />
+  if (visualKind === 'windowed-sinc') return <WindowedSincDiagram />
   if (visualKind === 'envelope') return <EnvelopeDiagram />
   if (visualKind === 'q-bandwidth') return <QBandwidthDiagram />
   if (visualKind === 'dbfs') return <DbfsDiagram />

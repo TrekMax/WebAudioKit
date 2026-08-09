@@ -33,6 +33,8 @@ describe('audio knowledge graph catalog', () => {
     expect(conceptIds).toEqual(expect.arrayContaining([
       'iir-filter',
       'nyquist-theorem',
+      'cubic-interpolation',
+      'windowed-sinc',
       'amplitude-envelope',
       'q-bandwidth',
       'dbfs-level',

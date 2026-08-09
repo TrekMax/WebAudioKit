@@ -3,6 +3,8 @@ import type { FilterKind } from '../audio/filterGraph'
 export type AudioConceptVisualKind =
   | 'iir-flow'
   | 'nyquist'
+  | 'cubic-interpolation'
+  | 'windowed-sinc'
   | 'envelope'
   | 'q-bandwidth'
   | 'dbfs'
@@ -47,6 +49,26 @@ export const AUDIO_KNOWLEDGE_CONCEPTS: readonly AudioKnowledgeConcept[] = [
     visualKind: 'nyquist',
     visualSummary: '奈奎斯特频率把可表示频带与混叠区域分开，越界频率会镜像折返到较低频率。',
     relatedTopics: ['采样器', '抗混叠', '采样率', '低通'],
+  },
+  {
+    id: 'cubic-interpolation',
+    title: '三次平滑',
+    englishTitle: 'CUBIC CATMULL–ROM RECONSTRUCTION',
+    introduction: '三次平滑使用相邻四个离散采样点构造三次曲线。本项目采用 Catmull–Rom 插值，让曲线经过中间两个样本，并用前后样本估计切线方向。',
+    keyPoint: '它比线性插值更连续、通常能保留更多瞬态和高频，但不是带限算法；陡峭边缘可能过冲，并引入约两个目标采样间隔的因果延迟。',
+    visualKind: 'cubic-interpolation',
+    visualSummary: '虚线表示两点间的线性连接，实线利用四个相邻样本形成更连续的三次重建曲线。',
+    relatedTopics: ['采样器', '线性插值', 'Catmull–Rom', '过冲', '因果延迟'],
+  },
+  {
+    id: 'windowed-sinc',
+    title: '带限重建',
+    englishTitle: 'WINDOWED-SINC RECONSTRUCTION',
+    introduction: '理想带限重建用 sinc 核对多个离散样本加权求和。实际实时系统会对无限延伸的 sinc 截断并加窗，本项目使用 128 个分数相位与 16 抽头 Lanczos 窗。',
+    keyPoint: '它的通带更平直、镜像抑制优于低阶插值，但乘加成本最高，也可能出现前后振铃；当前固定因果实现会延迟约八个目标采样间隔。',
+    visualKind: 'windowed-sinc',
+    visualSummary: '有限窗口保留 sinc 中心主瓣和逐渐衰减的旁瓣，16 个抽头共同计算一个重建样本。',
+    relatedTopics: ['采样器', '奈奎斯特定理', '抗混叠', 'FIR', '窗函数'],
   },
   {
     id: 'amplitude-envelope',
