@@ -402,6 +402,46 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .audio-concept-heat-cell.level-3 { fill: var(--accent); }
 .audio-wiki-disclaimer { margin: -5px 0 0; padding: 13px 15px; display: flex; align-items: center; justify-content: center; gap: 9px; color: #667888; border: 1px solid rgba(47,65,81,0.7); border-radius: 7px; background: rgba(12,18,26,0.7); font-size: 12px; line-height: 1.55; text-align: center; }
 .audio-wiki-disclaimer svg { flex: 0 0 auto; color: var(--amber); }
+
+/* Keep compact knowledge-graph labels readable against the dark teaching surfaces. */
+:root[data-theme="dark"] .audio-wiki-page .eyebrow,
+:root[data-theme="dark"] .audio-wiki-stats small,
+:root[data-theme="dark"] .audio-wiki-index nav a small,
+:root[data-theme="dark"] .audio-wiki-section-heading > span,
+:root[data-theme="dark"] .audio-concept-header small,
+:root[data-theme="dark"] .audio-concept-badge,
+:root[data-theme="dark"] .audio-concept-figure-heading span,
+:root[data-theme="dark"] .audio-concept-relations strong,
+:root[data-theme="dark"] .audio-wiki-disclaimer,
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-badge,
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-figure-heading span,
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-legend,
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-legend .overlap { color: #8295a6; }
+
+:root[data-theme="dark"] .audio-wiki-index-note,
+:root[data-theme="dark"] .audio-wiki-section-heading p,
+:root[data-theme="dark"] .audio-concept-figure figcaption,
+:root[data-theme="dark"] .audio-concept-key-point,
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-spectrum figcaption,
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-parameters { color: #91a2b0; }
+
+:root[data-theme="dark"] .audio-wiki-index-heading small,
+:root[data-theme="dark"] .audio-concept-relations span,
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-header small { color: #84aa9f; }
+
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-parameters strong { color: #c8a77f; }
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-grid text,
+:root[data-theme="dark"] .audio-wiki-card .filter-guide-axis-unit,
+:root[data-theme="dark"] .audio-concept-axis-text,
+:root[data-theme="dark"] .audio-concept-zone-label { fill: #8295a6; }
+:root[data-theme="dark"] .audio-concept-axis-text.strong { fill: #9db8b2; }
+:root[data-theme="dark"] .audio-concept-zone-label.safe { fill: #84aa9f; }
+:root[data-theme="dark"] .audio-concept-zone-label.risk { fill: #cf8b90; }
+:root[data-theme="dark"] .audio-concept-zone-label.q-low { fill: #8b9dad; }
+:root[data-theme="dark"] .audio-concept-zone-label.q-medium { fill: #86abd0; }
+:root[data-theme="dark"] .audio-concept-feedback-label { fill: #c8a77f; }
+:root[data-theme="dark"] .audio-concept-feedback-label.warning { fill: #e0b77d; }
+
 .filter-graph-panel { display: grid; grid-template-rows: 58px minmax(0,1fr) auto; }
 .filter-graph-canvas { min-width: 0; min-height: 0; position: relative; padding: 35px 26px 70px; display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; background-color: #080d14; background-image: linear-gradient(rgba(39,55,69,0.22) 1px, transparent 1px), linear-gradient(90deg, rgba(39,55,69,0.22) 1px, transparent 1px); background-size: 22px 22px; scrollbar-width: thin; scrollbar-color: #2f4254 #090f16; }
 .filter-graph-canvas.dragging { cursor: grabbing; user-select: none; }
