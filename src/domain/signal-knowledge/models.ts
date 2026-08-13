@@ -4,6 +4,7 @@ import {
   computeTeachingStft,
   generateTeachingSignal,
   type DftBinContribution,
+  type TeachingSignalKind,
   type TeachingStftModel,
 } from './transforms'
 
@@ -21,6 +22,7 @@ export interface DftTeachingModel {
   readonly sampleCount: number
   readonly signalBin: number
   readonly inspectedBin: number
+  readonly signalKind: TeachingSignalKind
   readonly samples: Float64Array
   readonly contributions: readonly DftBinContribution[]
 }
@@ -56,9 +58,10 @@ export function createDftTeachingModel(
   signalBin = 3,
   inspectedBin = 3,
   phaseRadians = 0,
+  signalKind: TeachingSignalKind = 'sine',
 ): DftTeachingModel {
   const samples = generateTeachingSignal({
-    kind: 'sine',
+    kind: signalKind,
     sampleCount,
     cycles: signalBin,
     phaseRadians,
@@ -67,6 +70,7 @@ export function createDftTeachingModel(
     sampleCount,
     signalBin,
     inspectedBin,
+    signalKind,
     samples,
     contributions: computeDftBinContributions(samples, inspectedBin),
   }

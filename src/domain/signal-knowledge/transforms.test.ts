@@ -107,6 +107,22 @@ describe('signal knowledge STFT', () => {
     expect(model.magnitudes).toHaveLength(model.frameCount * model.binCount)
     expect(model.maxMagnitude).toBeGreaterThan(0)
     expect(Array.from(model.magnitudes).every(Number.isFinite)).toBe(true)
+
+    const dominantBinAt = (frame: number) => {
+      let dominantBin = 0
+      let dominantMagnitude = -Infinity
+      for (let bin = 0; bin < model.binCount; bin += 1) {
+        const magnitude = model.magnitudes[frame * model.binCount + bin] ?? 0
+        if (magnitude > dominantMagnitude) {
+          dominantBin = bin
+          dominantMagnitude = magnitude
+        }
+      }
+      return dominantBin
+    }
+    expect(dominantBinAt(model.frameCount - 1)).toBeGreaterThan(
+      dominantBinAt(0),
+    )
   })
 
   it('keeps silence at zero and validates bounded parameters', () => {

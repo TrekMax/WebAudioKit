@@ -6,15 +6,19 @@ import type {
   DftTeachingModel,
   PhasorTeachingModel,
 } from '../domain/signal-knowledge/models'
+import type { TeachingStftModel } from '../domain/signal-knowledge/transforms'
 
-export type SignalKnowledgeDemoKind = 'phasor' | 'dft'
+export type SignalKnowledgeDemoKind = 'phasor' | 'dft' | 'stft'
 
 export interface SignalKnowledge3DProps {
   readonly demo: SignalKnowledgeDemoKind
   readonly phasorModel: PhasorTeachingModel
   readonly dftModel: DftTeachingModel
+  readonly stftModel: TeachingStftModel
   readonly phaseRadians: number
   readonly revealCount: number
+  readonly stftFrameIndex: number
+  readonly onContextLost?: () => void
 }
 
 type RuntimeStatus = 'starting' | 'ready' | 'unavailable' | 'context-lost'
@@ -24,12 +28,22 @@ interface PhasorObjects {
   readonly projection: THREE.Line
   readonly vector: THREE.Line
   readonly point: THREE.Mesh
+  readonly helixPositions: Float32Array
+  readonly projectionPositions: Float32Array
+  readonly vectorPositions: Float32Array
 }
 
 interface DftObjects {
   readonly path: THREE.Line
   readonly point: THREE.Mesh
   readonly positions: Float32Array
+}
+
+interface StftObjects {
+  readonly slice: THREE.Line
+  readonly slicePositions: Float32Array
+  readonly model: TeachingStftModel
+  readonly magnitudeScale: number
 }
 
 interface SceneRuntime {
@@ -41,6 +55,7 @@ interface SceneRuntime {
   readonly requestRender: () => void
   phasor: PhasorObjects | null
   dft: DftObjects | null
+  stft: StftObjects | null
 }
 
 function createLine(
@@ -86,6 +101,7 @@ function clearContent(runtime: SceneRuntime): void {
   runtime.content.clear()
   runtime.phasor = null
   runtime.dft = null
+  runtime.stft = null
 }
 
 function addCoordinateFrame(content: THREE.Group): void {
@@ -106,8 +122,7 @@ function updatePhasorObjects(
   phaseRadians: number,
 ): void {
   if (!runtime.phasor) return
-  const helixPositions = new Float32Array(model.points.length * 3)
-  const projectionPositions = new Float32Array(model.points.length * 3)
+  const { helixPositions, projectionPositions, vectorPositions } = runtime.phasor
   for (let index = 0; index < model.points.length; index += 1) {
     const point = model.points[index]
     if (!point) continue
@@ -123,22 +138,19 @@ function updatePhasorObjects(
     projectionPositions[offset + 1] = real
     projectionPositions[offset + 2] = 0
   }
-  runtime.phasor.helix.geometry.setAttribute(
-    'position',
-    new THREE.BufferAttribute(helixPositions, 3),
-  )
-  runtime.phasor.projection.geometry.setAttribute(
-    'position',
-    new THREE.BufferAttribute(projectionPositions, 3),
-  )
+  runtime.phasor.helix.geometry.getAttribute('position').needsUpdate = true
+  runtime.phasor.projection.geometry.getAttribute('position').needsUpdate = true
 
   const currentAngle = phaseRadians
   const real = Math.cos(currentAngle) * 1.15
   const imaginary = Math.sin(currentAngle) * 1.15
-  runtime.phasor.vector.geometry.setFromPoints([
-    new THREE.Vector3(-2.3, 0, 0),
-    new THREE.Vector3(-2.3, real, imaginary),
-  ])
+  vectorPositions[0] = -2.3
+  vectorPositions[1] = 0
+  vectorPositions[2] = 0
+  vectorPositions[3] = -2.3
+  vectorPositions[4] = real
+  vectorPositions[5] = imaginary
+  runtime.phasor.vector.geometry.getAttribute('position').needsUpdate = true
   runtime.phasor.point.position.set(-2.3, real, imaginary)
   runtime.requestRender()
 }
@@ -152,12 +164,26 @@ function buildPhasorScene(
   const helix = createLine(0x1fdfb2)
   const projection = createLine(0x64a9ff, 0.82)
   const vector = createLine(0xffb35c)
+  const helixPositions = new Float32Array(model.points.length * 3)
+  const projectionPositions = new Float32Array(model.points.length * 3)
+  const vectorPositions = new Float32Array(6)
+  helix.geometry.setAttribute('position', new THREE.BufferAttribute(helixPositions, 3))
+  projection.geometry.setAttribute('position', new THREE.BufferAttribute(projectionPositions, 3))
+  vector.geometry.setAttribute('position', new THREE.BufferAttribute(vectorPositions, 3))
   const point = new THREE.Mesh(
     new THREE.SphereGeometry(0.085, 16, 12),
     new THREE.MeshBasicMaterial({ color: 0xffffff }),
   )
   runtime.content.add(helix, projection, vector, point)
-  runtime.phasor = { helix, projection, vector, point }
+  runtime.phasor = {
+    helix,
+    projection,
+    vector,
+    point,
+    helixPositions,
+    projectionPositions,
+    vectorPositions,
+  }
   updatePhasorObjects(runtime, model, phaseRadians)
 }
 
@@ -230,6 +256,103 @@ function updateDftReveal(runtime: SceneRuntime, revealCount: number): void {
   runtime.requestRender()
 }
 
+function updateStftSlice(runtime: SceneRuntime, frameIndex: number): void {
+  const objects = runtime.stft
+  if (!objects || objects.model.frameCount === 0) return
+  const frame = Math.max(0, Math.min(objects.model.frameCount - 1, frameIndex))
+  const x = objects.model.frameCount === 1
+    ? 0
+    : -2.25 + (frame / (objects.model.frameCount - 1)) * 4.5
+  for (let bin = 0; bin < objects.model.binCount; bin += 1) {
+    const offset = bin * 3
+    const magnitude = objects.model.magnitudes[
+      frame * objects.model.binCount + bin
+    ] ?? 0
+    objects.slicePositions[offset] = x
+    objects.slicePositions[offset + 1] = magnitude * objects.magnitudeScale + 0.025
+    objects.slicePositions[offset + 2] = objects.model.binCount === 1
+      ? 0
+      : -1.5 + (bin / (objects.model.binCount - 1)) * 3
+  }
+  objects.slice.geometry.getAttribute('position').needsUpdate = true
+  runtime.requestRender()
+}
+
+function buildStftScene(
+  runtime: SceneRuntime,
+  model: TeachingStftModel,
+  frameIndex: number,
+): void {
+  addCoordinateFrame(runtime.content)
+  const vertexCount = model.frameCount * model.binCount
+  const positions = new Float32Array(vertexCount * 3)
+  const colors = new Float32Array(vertexCount * 3)
+  const magnitudeScale = model.maxMagnitude > 0 ? 1.55 / model.maxMagnitude : 0
+  const color = new THREE.Color()
+  for (let frame = 0; frame < model.frameCount; frame += 1) {
+    for (let bin = 0; bin < model.binCount; bin += 1) {
+      const vertex = frame * model.binCount + bin
+      const offset = vertex * 3
+      const magnitude = model.magnitudes[vertex] ?? 0
+      const normalized = model.maxMagnitude > 0 ? magnitude / model.maxMagnitude : 0
+      positions[offset] = model.frameCount === 1
+        ? 0
+        : -2.25 + (frame / (model.frameCount - 1)) * 4.5
+      positions[offset + 1] = magnitude * magnitudeScale
+      positions[offset + 2] = model.binCount === 1
+        ? 0
+        : -1.5 + (bin / (model.binCount - 1)) * 3
+      color.setHSL(0.56 - normalized * 0.12, 0.78, 0.34 + normalized * 0.32)
+      colors[offset] = color.r
+      colors[offset + 1] = color.g
+      colors[offset + 2] = color.b
+    }
+  }
+  const indices: number[] = []
+  for (let frame = 0; frame < model.frameCount - 1; frame += 1) {
+    for (let bin = 0; bin < model.binCount - 1; bin += 1) {
+      const current = frame * model.binCount + bin
+      const nextFrame = current + model.binCount
+      indices.push(
+        current,
+        nextFrame,
+        current + 1,
+        current + 1,
+        nextFrame,
+        nextFrame + 1,
+      )
+    }
+  }
+  const surfaceGeometry = new THREE.BufferGeometry()
+  surfaceGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+  surfaceGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3))
+  surfaceGeometry.setIndex(indices)
+  const surface = new THREE.Mesh(
+    surfaceGeometry,
+    new THREE.MeshBasicMaterial({
+      opacity: 0.76,
+      side: THREE.DoubleSide,
+      transparent: true,
+      vertexColors: true,
+    }),
+  )
+
+  const wireframe = new THREE.LineSegments(
+    new THREE.WireframeGeometry(surfaceGeometry),
+    new THREE.LineBasicMaterial({
+      color: 0x8ecbff,
+      opacity: 0.2,
+      transparent: true,
+    }),
+  )
+  const slicePositions = new Float32Array(model.binCount * 3)
+  const slice = createLine(0xffb35c)
+  slice.geometry.setAttribute('position', new THREE.BufferAttribute(slicePositions, 3))
+  runtime.content.add(surface, wireframe, slice)
+  runtime.stft = { slice, slicePositions, model, magnitudeScale }
+  updateStftSlice(runtime, frameIndex)
+}
+
 function buildScene(
   runtime: SceneRuntime,
   props: SignalKnowledge3DProps,
@@ -237,8 +360,10 @@ function buildScene(
   clearContent(runtime)
   if (props.demo === 'phasor') {
     buildPhasorScene(runtime, props.phasorModel, props.phaseRadians)
-  } else {
+  } else if (props.demo === 'dft') {
     buildDftScene(runtime, props.dftModel, props.revealCount)
+  } else {
+    buildStftScene(runtime, props.stftModel, props.stftFrameIndex)
   }
   runtime.requestRender()
 }
@@ -313,6 +438,7 @@ export function SignalKnowledge3D(props: SignalKnowledge3DProps) {
       requestRender,
       phasor: null,
       dft: null,
+      stft: null,
     }
     runtimeRef.current = runtime
 
@@ -335,6 +461,7 @@ export function SignalKnowledge3D(props: SignalKnowledge3DProps) {
         renderFrame = null
       }
       setStatus('context-lost')
+      propsRef.current.onContextLost?.()
     }
     const handleContextRestored = () => {
       setStatus('ready')
@@ -366,7 +493,7 @@ export function SignalKnowledge3D(props: SignalKnowledge3DProps) {
   useEffect(() => {
     const runtime = runtimeRef.current
     if (runtime) buildScene(runtime, propsRef.current)
-  }, [props.demo, props.dftModel, props.phasorModel])
+  }, [props.demo, props.dftModel, props.phasorModel, props.stftModel])
 
   useEffect(() => {
     const runtime = runtimeRef.current
@@ -380,17 +507,24 @@ export function SignalKnowledge3D(props: SignalKnowledge3DProps) {
     if (props.demo === 'dft' && runtime) updateDftReveal(runtime, props.revealCount)
   }, [props.demo, props.revealCount])
 
+  useEffect(() => {
+    const runtime = runtimeRef.current
+    if (props.demo === 'stft' && runtime) {
+      updateStftSlice(runtime, props.stftFrameIndex)
+    }
+  }, [props.demo, props.stftFrameIndex])
+
   return (
     <div className="signal-knowledge-3d-shell">
       <div className="signal-knowledge-3d-canvas" ref={containerRef} />
       {status === 'starting' && <div className="signal-knowledge-3d-state"><span className="spinner" /> 正在创建 WebGL2 场景…</div>}
-      {status === 'unavailable' && <div className="signal-knowledge-3d-state warning"><strong>当前环境不支持 WebGL2</strong><span>右侧二维投影与参数读数仍可完整使用。</span></div>}
+      {status === 'unavailable' && <div className="signal-knowledge-3d-state warning"><strong>当前环境不支持 WebGL2</strong><span>旁侧二维投影与参数读数仍可完整使用。</span></div>}
       {status === 'context-lost' && <div className="signal-knowledge-3d-state warning"><strong>WebGL 上下文已丢失</strong><span>动画已暂停，恢复后会从教学模型重建。</span></div>}
       {status === 'ready' && (
         <div className="signal-knowledge-3d-axis" aria-hidden="true">
-          <span><i className="x" /> X · {props.demo === 'phasor' ? '时间' : '样本 n'}</span>
-          <span><i className="y" /> Y · 实部</span>
-          <span><i className="z" /> Z · 虚部</span>
+          <span><i className="x" /> X · {props.demo === 'phasor' ? '时间' : props.demo === 'dft' ? '样本 n' : '帧 / 时间'}</span>
+          <span><i className="y" /> Y · {props.demo === 'stft' ? '幅度' : '实部'}</span>
+          <span><i className="z" /> Z · {props.demo === 'stft' ? '频率 bin' : '虚部'}</span>
         </div>
       )}
     </div>

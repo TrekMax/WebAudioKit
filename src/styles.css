@@ -512,6 +512,10 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .signal-lab-dft-full, .signal-lab-dft-visible { fill: none; vector-effect: non-scaling-stroke; }
 .signal-lab-dft-full { stroke: rgba(95,119,139,0.32); stroke-width: 1; }
 .signal-lab-dft-visible { stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 4px rgba(31,223,178,0.25)); }
+.signal-lab-source-wave { fill: none; stroke: #657f94; stroke-width: 1.15; vector-effect: non-scaling-stroke; }
+.signal-lab-window-frame { fill: rgba(100,169,255,0.07); stroke: #64a9ff; stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.signal-lab-windowed-wave { fill: none; stroke: var(--accent); stroke-width: 1.9; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px rgba(31,223,178,0.24)); }
+.signal-lab-spectrum-bar { fill: #64a9ff; opacity: 0.82; }
 .signal-knowledge-3d-shell { height: 290px; position: relative; overflow: hidden; background: #070c12; }
 .signal-knowledge-3d-canvas { width: 100%; height: 100%; }
 .signal-knowledge-3d-canvas canvas { width: 100%; height: 100%; display: block; cursor: grab; }
@@ -1153,6 +1157,8 @@ input[type="number"],
 :root[data-theme="light"] .signal-lab-axis-line,
 :root[data-theme="light"] .signal-lab-complex-axis line { stroke: #91a6ae; }
 :root[data-theme="light"] .signal-lab-label { fill: #607780; }
+:root[data-theme="light"] .signal-lab-source-wave { stroke: #748e98; }
+:root[data-theme="light"] .signal-lab-window-frame { fill: rgba(47,111,182,0.065); stroke: #2f6fb6; }
 :root[data-theme="light"] .signal-knowledge-play-button { color: #ffffff; }
 :root[data-theme="light"] .signal-knowledge-readouts > span { border-color: #c6d3d7; background: #ffffff; }
 :root[data-theme="light"] .signal-knowledge-readouts small { color: #607780; }
