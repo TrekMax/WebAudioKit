@@ -103,9 +103,9 @@ export const FILTER_NODE_GUIDES: Readonly<Record<FilterKind, FilterNodeGuideCopy
   },
   resampler: {
     visualKind: 'waveform',
-    introduction: '在固定采样率的监听链中模拟较低目标采样率，再以保持、线性、三次或带限方式重建。目标采样率不低于输出上下文时透明直通，不会生成新的 PCM 帧或高频信息。',
-    parameterSummary: '复古保持成本最低且阶梯感明显；线性平滑减少跳变；三次平滑用四点 Catmull–Rom 改善连续性；带限重建用 128 相位 16 抽头窗化 sinc 提供最平直的通带，但实时成本与因果延迟最高。四种模式均先经过一阶抗混叠。',
-    visualSummary: '示例按较低目标采样率重建波形，高频细节被抗混叠处理抑制。',
+    introduction: '在固定采样率的监听链中模拟较低目标采样率，可直接抽点对照，或在抗混叠后以保持、线性、三次或带限方式重建。目标采样率不低于输出上下文时透明直通，不会生成新的 PCM 帧或高频信息。',
+    parameterSummary: '原始抽点不做抗混叠，专用于暴露频率折叠的算法对照；复古保持增加一阶抗混叠；线性平滑减少跳变；三次平滑用四点 Catmull–Rom 改善连续性；带限重建用 128 相位 16 抽头窗化 sinc 提供最平直的通带，但实时成本与因果延迟最高。',
+    visualSummary: '示例按较低目标采样率重建波形；原始抽点保留混叠，其他模式先抑制超出目标奈奎斯特的细节。',
   },
 }
 

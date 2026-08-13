@@ -61,7 +61,8 @@ class ResamplerProcessor extends AudioWorkletProcessor {
   constructor(options = {}) {
     super()
     const requestedAlgorithm = options.processorOptions?.algorithm
-    this.algorithm = requestedAlgorithm === 'linear'
+    this.algorithm = requestedAlgorithm === 'point'
+      || requestedAlgorithm === 'linear'
       || requestedAlgorithm === 'cubic'
       || requestedAlgorithm === 'sinc'
       ? requestedAlgorithm
@@ -87,6 +88,7 @@ class ResamplerProcessor extends AudioWorkletProcessor {
     const lowpassAlpha = downsampling
       ? 1 - Math.exp((-2 * Math.PI * cutoffHz) / sampleRate)
       : 1
+    const antiAlias = this.algorithm !== 'point'
 
     for (let channel = 0; channel < outputChannels.length; channel += 1) {
       const output = outputChannels[channel]
@@ -117,7 +119,9 @@ class ResamplerProcessor extends AudioWorkletProcessor {
       const historyOffset = channel * SINC_TAPS
       for (let frame = 0; frame < output.length; frame += 1) {
         const sample = input[frame] || 0
-        filtered += lowpassAlpha * (sample - filtered)
+        filtered = antiAlias
+          ? filtered + lowpassAlpha * (sample - filtered)
+          : sample
         phase += ratio
         if (!initialized) {
           phase -= Math.floor(phase)

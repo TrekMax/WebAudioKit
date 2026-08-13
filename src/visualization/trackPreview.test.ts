@@ -81,6 +81,31 @@ describe('buildTrackOverview', () => {
     expect(Math.max(...held.mins.map(Math.abs))).toBeLessThan(1)
   })
 
+  it('keeps raw point sampling distinct from the anti-aliased hold preview', () => {
+    const alternating = Float32Array.from(
+      { length: 32 },
+      (_, index) => index % 2 === 0 ? 1 : -1,
+    )
+    const build = (algorithm: 'point' | 'hold') => buildTrackResamplerOverviewRange(
+      [alternating],
+      16,
+      { start: 0, end: 16 },
+      {
+        sourceSampleRateHz: 16_000,
+        contextSampleRateHz: 16_000,
+        targetSampleRateHz: 4_000,
+        algorithm,
+      },
+      1,
+    )
+    const pointSampled = build('point')
+    const held = build('hold')
+
+    expect(Math.max(...pointSampled.maxs.map(Math.abs))).toBe(1)
+    expect(Math.max(...held.maxs.map(Math.abs))).toBeLessThan(1)
+    expect(pointSampled.maxs).not.toEqual(held.maxs)
+  })
+
   it('renders a smoother linear sampler preview with bounded visible input', () => {
     const ramp = Float32Array.from({ length: 64 }, (_, index) => index / 63)
     const held = buildTrackResamplerOverviewRange(

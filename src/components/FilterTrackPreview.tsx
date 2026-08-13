@@ -773,8 +773,8 @@ export function FilterTrackPreview({
   const previewDescription = viewMode === 'waveform'
     ? '仅计算可视时间范围 · B 轨模拟采样器时域结果'
     : viewMode === 'spectrum'
-      ? '当前播放位置 · B 轨叠加实时节点响应'
-      : '共享分析时段 · 点击定位 · 滚轮缩放'
+      ? '当前播放位置 · B 轨叠加节点幅频预测，不显示混叠折叠'
+      : '共享分析时段 · B 轨叠加节点幅频预测 · 点击定位 · 滚轮缩放'
 
   useEffect(() => {
     const handleViewportResize = () => {

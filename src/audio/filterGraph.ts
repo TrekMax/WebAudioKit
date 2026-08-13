@@ -2,7 +2,7 @@ export const MAX_FILTER_NODES = 16
 export const EQ_GAIN_MIN_DB = -24
 export const EQ_GAIN_MAX_DB = 24
 export const EQ_BAND_COUNTS = [7, 10, 15] as const
-export const RESAMPLING_ALGORITHMS = ['hold', 'linear', 'cubic', 'sinc'] as const
+export const RESAMPLING_ALGORITHMS = ['point', 'hold', 'linear', 'cubic', 'sinc'] as const
 
 export type EqBandCount = typeof EQ_BAND_COUNTS[number]
 export type ResamplingAlgorithm = typeof RESAMPLING_ALGORITHMS[number]
@@ -212,7 +212,7 @@ export const FILTER_DEFINITIONS: Readonly<Record<FilterKind, FilterDefinition>> 
   },
   resampler: {
     label: '采样器',
-    description: '使用四种重建算法模拟较低目标采样率',
+    description: '使用五种采样与重建算法模拟较低目标采样率',
     defaultFrequencyHz: 1_000,
     defaultQ: Math.SQRT1_2,
     defaultGainDb: 0,

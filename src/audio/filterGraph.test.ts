@@ -69,7 +69,7 @@ describe('filter graph compiler', () => {
       targetSampleRateHz: 24_000,
       resamplingAlgorithm: 'hold',
     })
-    expect(RESAMPLING_ALGORITHMS).toEqual(['hold', 'linear', 'cubic', 'sinc'])
+    expect(RESAMPLING_ALGORITHMS).toEqual(['point', 'hold', 'linear', 'cubic', 'sinc'])
     const equalizer = createFilterNodeConfig('equalizer', 'eq')
     expect(equalizer.eqBandCount).toBe(DEFAULT_EQ_BAND_COUNT)
     expect(equalizer.eqGainsDb).toEqual(

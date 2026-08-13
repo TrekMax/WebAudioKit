@@ -533,8 +533,9 @@ export function buildTrackOverviewRange(
 
 /**
  * Builds a bounded, visible-range-only approximation of the realtime sampler.
- * It follows the Worklet phase/hold rules and uses a short causal warm-up for
- * the one-pole anti-alias filter instead of scanning PCM from the file start.
+ * It follows the Worklet phase/hold rules. Filtered modes use a short causal
+ * warm-up for the one-pole anti-alias filter instead of scanning from the file
+ * start; raw point sampling intentionally skips that filter.
  */
 export function buildTrackResamplerOverviewRange(
   channels: readonly Float32Array[],
@@ -612,22 +613,25 @@ export function buildTrackResamplerOverviewRange(
   const eventSampleIndex = (step: number): number => (
     step <= 0 ? 0 : Math.max(0, Math.ceil(step / ratio) - 1)
   )
+  const sampledEventAt = config.algorithm === 'point'
+    ? sourceSampleAtContextFrame
+    : filteredSampleAt
   const sampleAt = (channelIndex: number, sampleIndex: number): number => {
     const contextFrame = Math.round(
       sampleIndex * config.contextSampleRateHz / config.sourceSampleRateHz,
     )
     const phasePosition = (contextFrame + 1) * ratio
     const currentStep = Math.floor(phasePosition)
-    const current = filteredSampleAt(channelIndex, eventSampleIndex(currentStep))
-    if (config.algorithm === 'hold') return current
-    const previous = filteredSampleAt(channelIndex, eventSampleIndex(currentStep - 1))
+    const current = sampledEventAt(channelIndex, eventSampleIndex(currentStep))
+    if (config.algorithm === 'point' || config.algorithm === 'hold') return current
+    const previous = sampledEventAt(channelIndex, eventSampleIndex(currentStep - 1))
     const phase = phasePosition - currentStep
     if (config.algorithm === 'linear') {
       return previous + (current - previous) * phase
     }
     if (config.algorithm === 'cubic') {
-      const p0 = filteredSampleAt(channelIndex, eventSampleIndex(currentStep - 3))
-      const p1 = filteredSampleAt(channelIndex, eventSampleIndex(currentStep - 2))
+      const p0 = sampledEventAt(channelIndex, eventSampleIndex(currentStep - 3))
+      const p1 = sampledEventAt(channelIndex, eventSampleIndex(currentStep - 2))
       return catmullRom(
         p0,
         p1,
@@ -644,7 +648,7 @@ export function buildTrackResamplerOverviewRange(
       if (Math.abs(distance) >= RESAMPLER_SINC_DELAY_SAMPLES) continue
       const coefficient = normalizedSinc(distance)
         * normalizedSinc(distance / RESAMPLER_SINC_DELAY_SAMPLES)
-      reconstructed += filteredSampleAt(
+      reconstructed += sampledEventAt(
         channelIndex,
         eventSampleIndex(currentStep - tap),
       ) * coefficient

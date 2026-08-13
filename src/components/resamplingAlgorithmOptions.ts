@@ -11,6 +11,14 @@ export interface ResamplingAlgorithmOption {
 
 export const RESAMPLING_ALGORITHM_OPTIONS: readonly ResamplingAlgorithmOption[] = [
   {
+    value: 'point',
+    label: '原始抽点',
+    algorithm: '直接抽点 + 零阶保持（无抗混叠）',
+    listeningCharacter: '保留最原始的频率折叠与混叠失真，用于直接观察不做预滤波的抽点结果。',
+    realtimeCost: '最低',
+    recommendation: '仅用作算法对照基线；需要正常降采样时应选择带抗混叠的模式。',
+  },
+  {
     value: 'hold',
     label: '复古保持',
     algorithm: '一阶抗混叠 + 零阶保持',

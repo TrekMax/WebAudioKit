@@ -614,6 +614,25 @@ describe('AudioEngine', () => {
     expect(response[3]).toBeLessThan(response[2] ?? 0)
   })
 
+  it('keeps raw point-sampling previews free of the anti-alias response', () => {
+    const pointEngine = createEngine(new FakeAudioContext())
+    const holdEngine = createEngine(new FakeAudioContext())
+    const resampler = {
+      ...createFilterNodeConfig('resampler', 'rate'),
+      targetSampleRateHz: 12_000,
+    }
+    pointEngine.setFilterChain([{ ...resampler, resamplingAlgorithm: 'point' }])
+    holdEngine.setFilterChain([resampler])
+
+    const frequenciesHz = new Float32Array([1_000, 10_000, 20_000])
+    const pointResponse = pointEngine.getFilterFrequencyResponseDb(frequenciesHz)
+    const holdResponse = holdEngine.getFilterFrequencyResponseDb(frequenciesHz)
+
+    expect(Array.from(pointResponse)).toEqual([0, 0, 0])
+    expect(pointResponse[1]).toBeGreaterThan(holdResponse[1] ?? 0)
+    expect(pointResponse[2]).toBeGreaterThan(holdResponse[2] ?? 0)
+  })
+
   it('models reconstruction quality in resampler spectrum previews', () => {
     const holdEngine = createEngine(new FakeAudioContext())
     const linearEngine = createEngine(new FakeAudioContext())

@@ -638,13 +638,16 @@ export class AudioEngine {
       const cutoffHz = Math.min(this.context.sampleRate * 0.45, targetSampleRateHz * 0.45)
       const alpha = 1 - Math.exp((-2 * Math.PI * cutoffHz) / this.context.sampleRate)
       const feedback = 1 - alpha
+      const antiAlias = filter.resamplingAlgorithm !== 'point'
       for (let index = 0; index < responseDb.length; index += 1) {
         const frequencyHz = queryFrequenciesHz[index] ?? 0
         const omega = (2 * Math.PI * frequencyHz) / this.context.sampleRate
         const denominator = Math.sqrt(
           1 + feedback * feedback - 2 * feedback * Math.cos(omega),
         )
-        const filterMagnitude = alpha / Math.max(denominator, 1e-12)
+        const filterMagnitude = antiAlias
+          ? alpha / Math.max(denominator, 1e-12)
+          : 1
         const reconstructionMagnitude = resamplerReconstructionMagnitude(
           filter.resamplingAlgorithm,
           frequencyHz,

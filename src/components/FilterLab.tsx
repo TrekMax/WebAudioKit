@@ -1086,7 +1086,7 @@ export function FilterLab({
               </div>
 
               <p className="filter-runtime-note">{selected.type === 'resampler'
-                ? '四种算法仅在模拟目标采样率低于输出上下文时参与重建；目标不低于上下文时固定采样率 AudioWorklet 透明直通，不会生成新的 PCM 帧或高频信息。带限重建使用固定抽头与预计算相位表，不支持 AudioWorklet 时节点透明旁路。'
+                ? '五种算法仅在模拟目标采样率低于输出上下文时参与处理；“原始抽点”故意不做抗混叠，仅用于算法对照。目标不低于上下文时固定采样率 AudioWorklet 透明直通，不会生成新的 PCM 帧或高频信息。带限重建使用固定抽头与预计算相位表，不支持 AudioWorklet 时节点透明旁路。'
                 : selected.type === 'equalizer'
                   ? `${selected.eqBandCount} 段 EQ 编译为串联的原生 Peaking Biquad；切换段数会重建当前 EQ 分组，但不会重启播放。`
                   : `当前 Nyquist：${formatFrequency(nyquist)}。超出当前设备范围的频率会由 Web Audio 安全钳位。`}</p>

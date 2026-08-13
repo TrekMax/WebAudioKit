@@ -75,7 +75,7 @@ describe('resampler AudioWorklet processor', () => {
     expect(Math.max(...downsampled.map(Math.abs))).toBeLessThan(0.5)
 
     const ramp = Float32Array.from({ length: 128 }, (_, index) => index / 127)
-    for (const algorithm of ['hold', 'linear', 'cubic', 'sinc']) {
+    for (const algorithm of ['point', 'hold', 'linear', 'cubic', 'sinc']) {
       const upsampled = new Float32Array(ramp.length)
       new Processor({ processorOptions: { algorithm } }).process(
         [[ramp]],
@@ -84,6 +84,63 @@ describe('resampler AudioWorklet processor', () => {
       )
       expect(upsampled).toEqual(ramp)
     }
+  })
+
+  it('supports raw point sampling without the anti-alias prefilter', async () => {
+    const Processor = await loadProcessor()
+    const alternating = Float32Array.from(
+      { length: 128 },
+      (_, index) => index % 2 === 0 ? 1 : -1,
+    )
+    const pointSampled = new Float32Array(alternating.length)
+    const held = new Float32Array(alternating.length)
+    const parameters = { targetSampleRateHz: new Float32Array([8_000]) }
+
+    new Processor({ processorOptions: { algorithm: 'point' } }).process(
+      [[alternating]],
+      [[pointSampled]],
+      parameters,
+    )
+    new Processor({ processorOptions: { algorithm: 'hold' } }).process(
+      [[alternating]],
+      [[held]],
+      parameters,
+    )
+
+    expect(Math.max(...pointSampled.map(Math.abs))).toBe(1)
+    expect(Math.max(...held.map(Math.abs))).toBeLessThan(0.5)
+    expect(pointSampled).not.toEqual(held)
+    expect(pointSampled.every(Number.isFinite)).toBe(true)
+  })
+
+  it('keeps raw point-sampling phase continuous across render quanta', async () => {
+    const Processor = await loadProcessor()
+    const input = Float32Array.from(
+      { length: 256 },
+      (_, index) => Math.sin(index * 0.19),
+    )
+    const parameters = { targetSampleRateHz: new Float32Array([11_025]) }
+    const wholeOutput = new Float32Array(input.length)
+    const splitOutput = new Float32Array(input.length)
+
+    new Processor({ processorOptions: { algorithm: 'point' } }).process(
+      [[input]],
+      [[wholeOutput]],
+      parameters,
+    )
+    const splitProcessor = new Processor({ processorOptions: { algorithm: 'point' } })
+    splitProcessor.process(
+      [[input.slice(0, 128)]],
+      [[splitOutput.subarray(0, 128)]],
+      parameters,
+    )
+    splitProcessor.process(
+      [[input.slice(128)]],
+      [[splitOutput.subarray(128)]],
+      parameters,
+    )
+
+    expect(splitOutput).toEqual(wholeOutput)
   })
 
   it('offers a smoother causal linear reconstruction than zero-order hold', async () => {

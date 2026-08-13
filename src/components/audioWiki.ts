@@ -45,7 +45,7 @@ export const AUDIO_KNOWLEDGE_CONCEPTS: readonly AudioKnowledgeConcept[] = [
     title: '奈奎斯特采样定理',
     englishTitle: 'NYQUIST–SHANNON THEOREM',
     introduction: '理想条件下，要无失真重建最高频率为 fmax 的带限信号，采样率 fs 必须大于 2 × fmax；fs / 2 称为奈奎斯特频率。',
-    keyPoint: '超过 fs / 2 的内容会折叠成混叠，降采样前必须先低通抗混叠；提高采样率不能找回已经丢失的高频。',
+    keyPoint: '超过 fs / 2 的内容会折叠成混叠，正常降采样前必须先低通抗混叠；采样器的“原始抽点”故意省略该步骤，仅用于算法对照。提高采样率不能找回已经丢失的高频。',
     visualKind: 'nyquist',
     visualSummary: '奈奎斯特频率把可表示频带与混叠区域分开，越界频率会镜像折返到较低频率。',
     relatedTopics: ['采样器', '抗混叠', '采样率', '低通'],
