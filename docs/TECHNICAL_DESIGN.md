@@ -614,6 +614,51 @@ Three.js 视图使用同一 SpectrogramManifest 的 LOD 数据：
 - 帧循环仅在播放、相机交互、数据更新或动画进行时运行；静止时按需渲染。
 - 自动降级：连续帧率低于 24 FPS 时降低 LOD/DPR；恢复需滞后阈值，避免档位抖动。
 
+### 12.1 信号处理教学可视化
+
+“信号处理图解”是独立的 Presentation 页面，只消费确定性教学模型，不依赖运行时 `AudioBuffer`、项目 store、播放快照或分析 Worker。页面名称与责任边界：
+
+- “音频知识图谱”继续解释处理节点、听感用途与核心概念。
+- “信号处理图解”聚焦复数、欧拉公式、离散采样、DFT/FFT、窗函数与 STFT 的数学过程和可操作图解。
+- 两个页面可以用稳定主题 ID 互相链接，但不复制同一段权威定义。
+
+建议模块：
+
+```text
+src/
+├── components/
+│   ├── SignalKnowledgePage.tsx
+│   ├── SignalKnowledgeDiagram.tsx
+│   └── SignalKnowledge3D.tsx       # React.lazy 动态载入
+├── domain/signal-knowledge/
+│   ├── catalog.ts                  # 文案、顺序、关联主题
+│   ├── complex.ts                  # 复数与相量纯函数
+│   ├── transforms.ts               # DFT、幅相、窗与教学 STFT
+│   └── models.ts                   # 有界的二维/三维数据模型
+└── visualization/
+    └── threeSceneLifecycle.ts           # 可选的通用创建/渲染/释放边界
+```
+
+数学约定：
+
+- 复数使用 `{ real, imaginary }`，幅度为 `hypot(real, imaginary)`，相位为 `atan2(imaginary, real)`。不在渲染层重复实现复数运算。
+- 教学 DFT 使用 `X[k] = Σ x[n] exp(-j2πkn/N)` 的未归一化定义，单边幅度展示再明确应用与权威 FFT 分析一致的 DC/Nyquist 特例和 `2/N` 缩放。
+- 教学页明确区分“DFT 的数学定义”与“FFT 的计算分解”；不另建一套对外权威频谱口径。
+- 窗函数优先复用分析层的 Hann/Hamming/Blackman 定义；教学 STFT 只对最多 128 个采样、64 个频率 bin 和 64 帧构建有界模型，不把大型 FFT 搬到 React 渲染中。
+- NaN、Infinity、非正整数 `N`、越界 bin 和空输入一律在 Domain 边界拒绝或按明确文档规则归零，渲染层不猜测异常数值。
+
+Three.js 运行时：
+
+- 不直接复用与 `StftPreviewResult`、dBFS 和播放头绑定的 `Fft3DView`；共享范围限于尺寸监听、按需渲染、WebGL 上下文事件和对称释放工具。
+- `SignalKnowledge3D` 只在可见演示激活时动态导入 Three.js chunk。静止场景按需渲染；动画场景只在用户点击播放后请求下一帧。
+- “旋转复数”坐标为时间、实部、虚部；同一相位必须驱动三维螺旋、复平面相量和二维正弦投影。
+- “DFT bin”坐标以样本序号表达时间，以复平面表达每个 `x[n] exp(-j2πkn/N)` 向量及部分和；参数更新时替换预分配几何数据，不在每帧创建对象。
+- “STFT 形成”使用确定性小型矩阵：X 为帧/时间，Z 为频率 bin，Y 为归一化幅度；二维滑动窗、当前频谱与三维当前时间切片共享同一帧索引。
+- 每个场景固定 DPR 上限为 2，复杂度受预计算模型尺寸上限约束；切换模型和卸载时对几何体、材质、渲染器、CSS2D 标签、OrbitControls 与事件监听逐项释放。
+- WebGL2 能力不足时保留使用同一数据模型生成的 SVG/Canvas 二维投影。上下文丢失时暂停动画；恢复后从纯数据模型重建场景。
+
+页面不纳入持久化项目状态；演示参数是临时 UI 状态。`AppPage` 和实时频谱可见性类型需显式加入 `signal-knowledge`，并以测试确保该页面始终不请求实时 FFT。
+
 ## 13. Worker 协议
 
 ### 13.1 消息信封
@@ -974,6 +1019,14 @@ Web Audio 集成可用 `OfflineAudioContext` 验证音频图；状态机单测�
 - **原因**：在不中断播放的前提下提供可视化曲线调节，同时保持配置、CPU 成本和滤波稳定性有界。
 - **代价**：首版中心频率和 Q 固定，不支持任意频段、动态 EQ 或参数自动化。
 
+### ADR-014：信号处理教学模型与运行时分离
+
+- **状态**：Accepted
+- **记录**：[`docs/adr/014-signal-processing-knowledge-visuals.md`](adr/014-signal-processing-knowledge-visuals.md)
+- **决定**：使用纯数据复数/DFT/STFT 教学模型同时驱动文字读数、SVG/Canvas 二维图解和懒加载 Three.js 三维演示，不读取当前 PCM 或调度分析任务。
+- **原因**：确保数学口径可单元测试、二维降级与三维演示一致，并使教学页不影响播放和工作台资源。
+- **代价**：需要独立的教学模型尺寸上限、Three.js 生命周期边界和双路渲染验收，不能把现有 FFT 3D 组件直接嵌入作为通用场景。
+
 ## 24. 实施顺序与技术验收门
 
 1. **基础设施门**：严格 TypeScript、测试框架、Worker typed protocol、CapabilityReport 和资源 dispose 约定就绪。
@@ -983,5 +1036,6 @@ Web Audio 集成可用 `OfflineAudioContext` 验证音频图；状态机单测�
 5. **可视化门**：2D WebGL/Canvas 降级与 Three.js 3D LOD 完成，context lost 和 dispose 有测试或可重复手工验证步骤。
 6. **导出门**：WAV 重新解码校验长度/格式，CSV 大小预估与分块输出可用。
 7. **发布门**：兼容矩阵、隐私说明、内存阈值、错误恢复、性能基准和缓存降级全部验收。
+8. **教学可视化门**：复数/DFT/STFT 纯函数通过已知信号测试，二维与三维读数一致，Three.js 懒加载、WebGL2 降级、减少动画与资源释放完成验收。
 
 每个阶段都必须保持已有纵向工作流可运行，不以“后续统一重构”为由绕过状态机、取消或资源释放。
