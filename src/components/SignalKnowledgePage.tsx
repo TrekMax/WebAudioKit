@@ -13,6 +13,7 @@ import {
   SIGNAL_KNOWLEDGE_TOPICS,
 } from '../domain/signal-knowledge/catalog'
 import { SignalKnowledgeDiagram } from './SignalKnowledgeDiagram'
+import { SignalKnowledgeLab } from './SignalKnowledgeLab'
 
 const SECTION_ICONS = [Atom, Binary, Layers3] as const
 
@@ -40,6 +41,11 @@ export function SignalKnowledgePage() {
               <span><strong>学习路径</strong><small>FROM z TO STFT</small></span>
             </div>
             <nav aria-label="信号处理知识图解章节">
+              <a href="#signal-knowledge-lab">
+                <span>00</span>
+                <strong>交互式数学实验</strong>
+                <small>3D</small>
+              </a>
               {SIGNAL_KNOWLEDGE_SECTIONS.map((section, index) => (
                 <a href={`#signal-knowledge-${section.id}`} key={section.id}>
                   <span>{String(index + 1).padStart(2, '0')}</span>
@@ -60,6 +66,8 @@ export function SignalKnowledgePage() {
               </div>
               <span><Waves size={14} /> 无需导入音频</span>
             </section>
+
+            <SignalKnowledgeLab />
 
             {SIGNAL_KNOWLEDGE_SECTIONS.map((section, sectionIndex) => {
               const SectionIcon = SECTION_ICONS[sectionIndex] ?? Layers3

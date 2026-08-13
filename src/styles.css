@@ -482,6 +482,64 @@ select:hover, input[type="number"]:hover { border-color: #3b5064; }
 .signal-diagram-equals { fill: #c6d1da; font-size: 12px; font-weight: 700; }
 .signal-knowledge-disclaimer { margin: -5px 0 0; padding: 13px 15px; display: flex; align-items: center; justify-content: center; gap: 9px; color: #8798a7; border: 1px solid rgba(47,65,81,0.7); border-radius: 7px; background: rgba(12,18,26,0.7); font-size: 12px; line-height: 1.55; text-align: center; }
 .signal-knowledge-disclaimer svg { flex: 0 0 auto; color: var(--amber); }
+.signal-knowledge-lab { min-width: 0; overflow: hidden; scroll-margin-top: 20px; border: 1px solid rgba(68,93,113,0.9); border-radius: 10px; box-shadow: 0 16px 34px rgba(0,0,0,0.2); }
+.signal-knowledge-lab-heading { min-height: 80px; padding: 15px 17px 13px; display: flex; align-items: end; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--border); background: linear-gradient(110deg,rgba(100,169,255,0.09),rgba(31,223,178,0.025) 58%,transparent); }
+.signal-knowledge-lab-heading h2 { margin: 5px 0 4px; display: flex; align-items: center; gap: 8px; color: #d5dfe7; font-size: 19px; }
+.signal-knowledge-lab-heading h2 svg { color: #64a9ff; }
+.signal-knowledge-lab-heading p { margin: 0; color: #8d9ca9; font-size: 12px; line-height: 1.55; }
+.signal-knowledge-lab-heading > span { padding-bottom: 3px; display: inline-flex; align-items: center; gap: 6px; color: #7899b6; font-family: var(--mono); font-size: 9px; letter-spacing: 0.06em; white-space: nowrap; }
+.signal-knowledge-demo-tabs { min-height: 48px; padding: 7px 9px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--border); background: #080e15; }
+.signal-knowledge-demo-tabs button { min-height: 32px; padding: 0 11px; display: inline-flex; align-items: center; gap: 7px; color: #8293a2; border: 1px solid transparent; border-radius: 5px; background: transparent; font-size: 11px; cursor: pointer; }
+.signal-knowledge-demo-tabs button:hover { color: #c3cfd8; background: var(--surface-hover); }
+.signal-knowledge-demo-tabs button.active { color: #bde6dc; border-color: rgba(31,223,178,0.28); background: rgba(31,223,178,0.08); }
+.signal-knowledge-lab-stage { min-width: 0; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1px; background: var(--border); }
+.signal-knowledge-lab-view { min-width: 0; margin: 0; overflow: hidden; background: #070c12; }
+.signal-knowledge-lab-view > header { min-height: 44px; padding: 8px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #708292; border-bottom: 1px solid rgba(38,52,66,0.76); background: #0a1119; }
+.signal-knowledge-lab-view > header span { font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; }
+.signal-knowledge-lab-view > header strong { color: #aab9c5; font-size: 11px; font-weight: 600; }
+.signal-knowledge-lab-view > svg { width: 100%; height: 290px; display: block; }
+.signal-lab-grid line { stroke: rgba(78,100,117,0.2); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.signal-lab-axis-line, .signal-lab-complex-axis line { stroke: #506a7e; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.signal-lab-orbit { fill: rgba(100,169,255,0.025); stroke: #6084a4; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.signal-lab-vector { stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 4px rgba(31,223,178,0.3)); }
+.signal-lab-projection { stroke: #ffb35c; stroke-width: 1.1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+.signal-lab-point { fill: #ffffff; stroke: var(--accent); stroke-width: 1.4; }
+.signal-lab-wave { fill: none; stroke: #64a9ff; stroke-width: 2; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 3px rgba(100,169,255,0.25)); }
+.signal-lab-label { fill: #8396a5; font-family: var(--mono); font-size: 10px; }
+.signal-lab-sample-stem { stroke: #5f84a5; stroke-width: 0.9; vector-effect: non-scaling-stroke; }
+.signal-lab-sample { fill: #526f85; }
+.signal-lab-sample.active { fill: #64a9ff; filter: drop-shadow(0 0 2px rgba(100,169,255,0.5)); }
+.signal-lab-dft-full, .signal-lab-dft-visible { fill: none; vector-effect: non-scaling-stroke; }
+.signal-lab-dft-full { stroke: rgba(95,119,139,0.32); stroke-width: 1; }
+.signal-lab-dft-visible { stroke: var(--accent); stroke-width: 2; filter: drop-shadow(0 0 4px rgba(31,223,178,0.25)); }
+.signal-knowledge-3d-shell { height: 290px; position: relative; overflow: hidden; background: #070c12; }
+.signal-knowledge-3d-canvas { width: 100%; height: 100%; }
+.signal-knowledge-3d-canvas canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+.signal-knowledge-3d-canvas canvas:active { cursor: grabbing; }
+.signal-knowledge-3d-state, .signal-knowledge-3d-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 8px; color: #8fa0ad; background: radial-gradient(circle at center,rgba(20,34,46,0.9),rgba(7,12,18,0.98)); font-size: 12px; }
+.signal-knowledge-3d-loading { position: relative; height: 290px; }
+.signal-knowledge-3d-state.warning { flex-direction: column; color: #8495a3; text-align: center; }
+.signal-knowledge-3d-state.warning strong { color: #d0a66f; font-size: 13px; }
+.signal-knowledge-3d-state.warning span { max-width: 290px; line-height: 1.6; }
+.signal-knowledge-3d-axis { position: absolute; left: 10px; bottom: 9px; padding: 6px 8px; display: flex; flex-wrap: wrap; gap: 6px 10px; color: #8293a1; border: 1px solid rgba(48,65,82,0.72); border-radius: 4px; background: rgba(7,12,18,0.8); font-family: var(--mono); font-size: 8px; pointer-events: none; }
+.signal-knowledge-3d-axis span { display: inline-flex; align-items: center; gap: 4px; }
+.signal-knowledge-3d-axis i { width: 7px; height: 2px; display: inline-block; background: #58748a; }
+.signal-knowledge-3d-axis i.y { background: var(--accent); }
+.signal-knowledge-3d-axis i.z { background: #ffb35c; }
+.signal-knowledge-lab-controls { padding: 12px 13px; display: grid; grid-template-columns: repeat(auto-fit,minmax(168px,1fr)); align-items: end; gap: 9px 12px; border-top: 1px solid var(--border); background: #0a1118; }
+.signal-knowledge-playback-controls { min-height: 48px; display: flex; align-items: center; gap: 7px; }
+.signal-knowledge-play-button { min-height: 32px; padding: 0 11px; display: inline-flex; align-items: center; gap: 6px; color: #07140f; border: 0; border-radius: 5px; background: var(--accent); font-size: 11px; font-weight: 700; cursor: pointer; }
+.signal-knowledge-motion-note { max-width: 150px; color: #8f9eaa; font-size: 9px; line-height: 1.4; }
+.signal-knowledge-control-field { min-width: 0; min-height: 48px; display: grid; align-content: center; gap: 8px; color: #8293a2; font-size: 10px; }
+.signal-knowledge-control-field > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.signal-knowledge-control-field output { color: #adc0cc; font-family: var(--mono); }
+.signal-knowledge-control-field input[type="range"] { width: 100%; accent-color: var(--accent); cursor: pointer; }
+.signal-knowledge-control-field select { width: 100%; height: 29px; }
+.signal-knowledge-readouts { padding: 10px 13px 12px; display: grid; grid-template-columns: repeat(3,minmax(94px,0.42fr)) minmax(220px,1.7fr); gap: 8px; border-top: 1px solid var(--border); background: #080e15; }
+.signal-knowledge-readouts > span { min-width: 0; padding: 7px 8px; display: grid; gap: 4px; border: 1px solid rgba(42,58,72,0.88); border-radius: 5px; background: rgba(11,18,26,0.9); }
+.signal-knowledge-readouts small { color: #7c8d9b; font-size: 9px; }
+.signal-knowledge-readouts strong { overflow: hidden; color: #b8d9d1; font-family: var(--mono); font-size: 12px; text-overflow: ellipsis; }
+.signal-knowledge-readouts p { margin: 0; padding: 7px 9px; display: flex; align-items: center; color: #8d9daa; border-left: 2px solid rgba(255,179,92,0.65); background: rgba(255,179,92,0.035); font-size: 10px; line-height: 1.55; }
 
 /* Keep compact knowledge-graph labels readable against the dark teaching surfaces. */
 :root[data-theme="dark"] .audio-wiki-page .eyebrow,
@@ -1076,6 +1134,29 @@ input[type="number"],
 :root[data-theme="light"] .signal-diagram-label { fill: #607780; }
 :root[data-theme="light"] .signal-diagram-equals { fill: #38515a; }
 :root[data-theme="light"] .signal-diagram-value { fill: #276f62; }
+:root[data-theme="light"] .signal-knowledge-lab { border-color: #aebfc5; box-shadow: 0 16px 34px rgba(47,68,75,0.13); }
+:root[data-theme="light"] .signal-knowledge-lab-heading { background: linear-gradient(110deg,rgba(47,111,182,0.09),rgba(8,126,105,0.035) 58%,transparent); }
+:root[data-theme="light"] .signal-knowledge-lab-heading h2 { color: var(--text); }
+:root[data-theme="light"] .signal-knowledge-lab-heading p,
+:root[data-theme="light"] .signal-knowledge-lab-view > header,
+:root[data-theme="light"] .signal-knowledge-control-field,
+:root[data-theme="light"] .signal-knowledge-readouts p { color: #5d727a; }
+:root[data-theme="light"] .signal-knowledge-demo-tabs,
+:root[data-theme="light"] .signal-knowledge-lab-controls,
+:root[data-theme="light"] .signal-knowledge-readouts { background: #f3f7f8; }
+:root[data-theme="light"] .signal-knowledge-demo-tabs button:hover { color: var(--text); background: #e5edef; }
+:root[data-theme="light"] .signal-knowledge-demo-tabs button.active { color: #276f62; border-color: rgba(8,126,105,0.28); background: rgba(8,126,105,0.08); }
+:root[data-theme="light"] .signal-knowledge-lab-view,
+:root[data-theme="light"] .signal-knowledge-lab-view > header { background: #f4f8f9; }
+:root[data-theme="light"] .signal-knowledge-lab-view > header strong { color: #38515a; }
+:root[data-theme="light"] .signal-lab-grid line { stroke: rgba(75,102,112,0.2); }
+:root[data-theme="light"] .signal-lab-axis-line,
+:root[data-theme="light"] .signal-lab-complex-axis line { stroke: #91a6ae; }
+:root[data-theme="light"] .signal-lab-label { fill: #607780; }
+:root[data-theme="light"] .signal-knowledge-play-button { color: #ffffff; }
+:root[data-theme="light"] .signal-knowledge-readouts > span { border-color: #c6d3d7; background: #ffffff; }
+:root[data-theme="light"] .signal-knowledge-readouts small { color: #607780; }
+:root[data-theme="light"] .signal-knowledge-readouts strong { color: #276f62; }
 :root[data-theme="light"] .audio-concept-header { background: linear-gradient(100deg,rgba(47,111,182,0.08),rgba(8,126,105,0.04) 58%,transparent); }
 :root[data-theme="light"] .audio-concept-header strong,
 :root[data-theme="light"] .audio-concept-figure-heading strong { color: #314950; }

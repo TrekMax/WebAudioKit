@@ -55,11 +55,13 @@ export function createDftTeachingModel(
   sampleCount = 16,
   signalBin = 3,
   inspectedBin = 3,
+  phaseRadians = 0,
 ): DftTeachingModel {
   const samples = generateTeachingSignal({
     kind: 'sine',
     sampleCount,
     cycles: signalBin,
+    phaseRadians,
   })
   return {
     sampleCount,
