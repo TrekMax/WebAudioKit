@@ -46,4 +46,12 @@ describe('realtime spectrum demand', () => {
       filterView: 'spectrum',
     })).toBe(false)
   })
+
+  it('stops realtime FFT work while signal knowledge visuals are visible', () => {
+    expect(shouldRunRealtimeSpectrum({
+      appPage: 'signal-knowledge',
+      analysisView: 'spectrum',
+      filterView: 'spectrum',
+    })).toBe(false)
+  })
 })

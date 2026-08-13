@@ -1,4 +1,8 @@
-export type RealtimeSpectrumAppPage = 'analysis' | 'filters' | 'wiki'
+export type RealtimeSpectrumAppPage =
+  | 'analysis'
+  | 'filters'
+  | 'wiki'
+  | 'signal-knowledge'
 export type RealtimeSpectrumAnalysisView = 'spectrum' | 'spectrogram' | '3d'
 export type RealtimeSpectrumFilterView = 'waveform' | 'spectrum' | 'spectrogram'
 

@@ -58,6 +58,7 @@ import {
   type WavExportRequest,
 } from './components/ExportDialog'
 import { FilterLab } from './components/FilterLab'
+import { SignalKnowledgePage } from './components/SignalKnowledgePage'
 import type { FilterTrackPreviewMode } from './components/FilterTrackPreview'
 import type { Fft3DMode, Fft3DQuality } from './components/Fft3DView'
 import { SpectrogramCanvas } from './components/SpectrogramCanvas'
@@ -1467,8 +1468,10 @@ export function App() {
           onOutputChannelEnabledChange={(channelIndex, enabled) => ensureEngine().setOutputChannelEnabled(channelIndex, enabled)}
           onOutputBalanceChange={(balance) => ensureEngine().setOutputBalance(balance)}
         />
-      ) : (
+      ) : appPage === 'wiki' ? (
         <AudioWiki />
+      ) : (
+        <SignalKnowledgePage />
       )}
 
       <Transport
