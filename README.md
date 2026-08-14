@@ -55,6 +55,12 @@ npm test
 npm run build
 ```
 
+## 部署
+
+生产环境推荐将 `dist/` 作为静态站点部署到独立域名，并通过 Nginx 提供服务、Certbot 配置 HTTPS。AudioWorklet 等浏览器能力依赖安全上下文，因此公网环境不要只使用 HTTP。
+
+首次部署、版本化更新、回滚、缓存规则和上线验收步骤见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)。
+
 ## 工程结构
 
 ```text
