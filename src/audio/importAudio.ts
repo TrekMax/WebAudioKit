@@ -24,6 +24,7 @@ export type AudioImportErrorCode =
   | 'IMPORT_AUDIO_UNAVAILABLE'
   | 'IMPORT_UNSUPPORTED_FORMAT'
   | 'IMPORT_DECODE_FAILED'
+  | 'IMPORT_SAMPLE_RATE_MISMATCH'
   | 'IMPORT_INVALID_PCM'
   | 'IMPORT_PCM_TOO_LARGE'
   | 'IMPORT_CANCELLED'
@@ -33,6 +34,8 @@ export interface AudioImportErrorDetails {
   readonly limitBytes?: number
   readonly decodedPcmBytes?: number
   readonly estimatedWorkingSetBytes?: number
+  readonly sourceSampleRate?: number
+  readonly decodedSampleRate?: number
 }
 
 export interface SerializedAudioImportError {
@@ -116,6 +119,8 @@ export interface ImportAudioOptions {
   readonly softPcmLimitBytes?: number
   /** Test/embedded-environment override; defaults to globalThis.crypto. */
   readonly cryptoProvider?: Pick<Crypto, 'subtle'>
+  /** Test/embedded-environment override for native-rate WAV decoding. */
+  readonly sourceRateDecodeContextFactory?: AudioDecodeContextFactory
 }
 
 export interface QuickFingerprintOptions {
@@ -125,6 +130,9 @@ export interface QuickFingerprintOptions {
 }
 
 export type AudioDecodeContext = Pick<BaseAudioContext, 'decodeAudioData'>
+export type AudioDecodeContextFactory = (
+  sampleRate: number,
+) => AudioDecodeContext | null
 
 export function isAudioImportError(error: unknown): error is AudioImportError {
   return error instanceof AudioImportError
@@ -352,9 +360,18 @@ export async function importAudio(
     )
   }
 
+  const sourceWavSampleRate = readWavSampleRate(encodedAudio)
   let audioBuffer: AudioBuffer
   try {
-    audioBuffer = await audioContext.decodeAudioData(encodedAudio)
+    const sourceRateDecodeContext = sourceWavSampleRate === null
+      ? null
+      : (
+          options.sourceRateDecodeContextFactory
+          ?? createOfflineDecodeContext
+        )(sourceWavSampleRate)
+    audioBuffer = await (
+      sourceRateDecodeContext ?? audioContext
+    ).decodeAudioData(encodedAudio)
     throwIfAborted(options.signal, 'decoding')
   } catch (error) {
     if (isAudioImportError(error)) {
@@ -382,6 +399,21 @@ export async function importAudio(
   }
 
   validateDecodedAudioBuffer(audioBuffer)
+  if (
+    sourceWavSampleRate !== null
+    && audioBuffer.sampleRate !== sourceWavSampleRate
+  ) {
+    throw importFailure(
+      'IMPORT_SAMPLE_RATE_MISMATCH',
+      'preparing',
+      `浏览器未能保留 WAV 的源采样率（${sourceWavSampleRate} Hz），未加载到工作区。`,
+      false,
+      {
+        sourceSampleRate: sourceWavSampleRate,
+        decodedSampleRate: audioBuffer.sampleRate,
+      },
+    )
+  }
   const decodedPcmBytes = estimateDecodedPcmBytes(
     audioBuffer.length,
     audioBuffer.numberOfChannels,
@@ -437,6 +469,70 @@ export async function importAudio(
     },
     memory,
   }
+}
+
+/**
+ * `decodeAudioData()` resamples into its owning context. Decode WAV files in a
+ * short-lived offline context whose rate matches the RIFF `fmt ` chunk so the
+ * runtime PCM, analysis and exports retain the source timeline and Nyquist.
+ */
+function createOfflineDecodeContext(sampleRate: number): AudioDecodeContext | null {
+  if (typeof globalThis.OfflineAudioContext !== 'function') {
+    return null
+  }
+
+  try {
+    return new globalThis.OfflineAudioContext({
+      length: 1,
+      numberOfChannels: 1,
+      sampleRate,
+    })
+  } catch {
+    return null
+  }
+}
+
+function readWavSampleRate(audioData: ArrayBuffer): number | null {
+  const bytes = new Uint8Array(audioData)
+  if (
+    bytes.length < 12
+    || (readFourCc(bytes, 0) !== 'RIFF' && readFourCc(bytes, 0) !== 'RF64')
+    || readFourCc(bytes, 8) !== 'WAVE'
+  ) {
+    return null
+  }
+
+  const view = new DataView(audioData)
+  let chunkOffset = 12
+  while (chunkOffset + 8 <= bytes.length) {
+    const chunkId = readFourCc(bytes, chunkOffset)
+    const chunkSize = view.getUint32(chunkOffset + 4, true)
+    const dataOffset = chunkOffset + 8
+    if (chunkSize > bytes.length - dataOffset) {
+      return null
+    }
+
+    if (chunkId === 'fmt ') {
+      if (chunkSize < 16) return null
+      const sampleRate = view.getUint32(dataOffset + 4, true)
+      return Number.isSafeInteger(sampleRate) && sampleRate > 0
+        ? sampleRate
+        : null
+    }
+
+    chunkOffset = dataOffset + chunkSize + (chunkSize % 2)
+  }
+
+  return null
+}
+
+function readFourCc(bytes: Uint8Array, offset: number): string {
+  return String.fromCharCode(
+    bytes[offset] ?? 0,
+    bytes[offset + 1] ?? 0,
+    bytes[offset + 2] ?? 0,
+    bytes[offset + 3] ?? 0,
+  )
 }
 
 function validateDecodedAudioBuffer(audioBuffer: AudioBuffer): void {

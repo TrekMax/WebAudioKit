@@ -28,6 +28,37 @@ function createAudioBuffer(
   } as unknown as AudioBuffer
 }
 
+function createPcm16Wav(
+  sampleRate: number,
+  lengthSamples: number,
+  numberOfChannels = 1,
+): Uint8Array<ArrayBuffer> {
+  const bytesPerSample = 2
+  const dataBytes = lengthSamples * numberOfChannels * bytesPerSample
+  const bytes = new Uint8Array(44 + dataBytes)
+  const view = new DataView(bytes.buffer)
+  const writeFourCc = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      bytes[offset + index] = value.charCodeAt(index)
+    }
+  }
+
+  writeFourCc(0, 'RIFF')
+  view.setUint32(4, bytes.length - 8, true)
+  writeFourCc(8, 'WAVE')
+  writeFourCc(12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, numberOfChannels, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * numberOfChannels * bytesPerSample, true)
+  view.setUint16(32, numberOfChannels * bytesPerSample, true)
+  view.setUint16(34, bytesPerSample * 8, true)
+  writeFourCc(36, 'data')
+  view.setUint32(40, dataBytes, true)
+  return bytes
+}
+
 class FakeDecodeContext {
   decodedInput: ArrayBuffer | null = null
   decodeError: unknown = null
@@ -159,6 +190,71 @@ describe('audio import', () => {
       estimatedWorkingSetBytes: 192_008,
       softLimitBytes: 150_000,
       exceedsSoftLimit: true,
+    })
+  })
+
+  it('decodes WAV PCM in a context matching the source sample rate', async () => {
+    const sourceSampleRate = 16_000
+    const sourceLength = 160
+    const file = new File(
+      [createPcm16Wav(sourceSampleRate, sourceLength)],
+      'native-rate.wav',
+      { type: 'audio/wav', lastModified: 100 },
+    )
+    const outputRateContext = new FakeDecodeContext(
+      createAudioBuffer(480, 48_000, 1),
+    )
+    const sourceRateContext = new FakeDecodeContext(
+      createAudioBuffer(sourceLength, sourceSampleRate, 1),
+    )
+    let requestedSampleRate: number | null = null
+
+    const imported = await importAudio(
+      file,
+      asDecodeContext(outputRateContext),
+      {
+        sourceRateDecodeContextFactory: (sampleRate) => {
+          requestedSampleRate = sampleRate
+          return asDecodeContext(sourceRateContext)
+        },
+      },
+    )
+
+    expect(requestedSampleRate).toBe(sourceSampleRate)
+    expect(outputRateContext.decodedInput).toBeNull()
+    expect(sourceRateContext.decodedInput?.byteLength).toBe(file.size)
+    expect(imported.audioBuffer).toBe(sourceRateContext.result)
+    expect(imported.metadata).toMatchObject({
+      durationSeconds: 0.01,
+      sampleRate: sourceSampleRate,
+      numberOfChannels: 1,
+      lengthSamples: sourceLength,
+      pcmBytes: sourceLength * Float32Array.BYTES_PER_ELEMENT,
+    })
+  })
+
+  it('rejects a WAV decoder result that changed the source sample rate', async () => {
+    const file = new File(
+      [createPcm16Wav(16_000, 160)],
+      'resampled.wav',
+      { type: 'audio/wav', lastModified: 101 },
+    )
+    const resampledContext = new FakeDecodeContext(
+      createAudioBuffer(480, 48_000, 1),
+    )
+
+    await expect(importAudio(
+      file,
+      asDecodeContext(resampledContext),
+      { sourceRateDecodeContextFactory: () => asDecodeContext(resampledContext) },
+    )).rejects.toMatchObject({
+      code: 'IMPORT_SAMPLE_RATE_MISMATCH',
+      stage: 'preparing',
+      retryable: false,
+      details: {
+        sourceSampleRate: 16_000,
+        decodedSampleRate: 48_000,
+      },
     })
   })
 
