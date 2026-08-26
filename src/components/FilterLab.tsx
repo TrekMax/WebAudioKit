@@ -236,6 +236,7 @@ export function FilterLab({
   const selectedPreset = getFilterPresetDefinition(selectedPresetId)
   const presetFitsNodeLimit = filters.length + selectedPreset.nodes.length <= MAX_FILTER_NODES
   const referenceSampleRate = outputSampleRate ?? sampleRate ?? 48_000
+  const sourceSampleRateLabel = sampleRate ? formatFrequency(sampleRate) : '未载入'
   const resamplingMode = selected?.type === 'resampler'
     ? resolveResamplingMode(selected.targetSampleRateHz, referenceSampleRate)
     : null
@@ -1009,8 +1010,8 @@ export function FilterLab({
                   <div className="resampler-mode-card">
                     <Gauge size={16} />
                     <span><strong>{resamplingMode?.label}</strong><small>{resamplingActive
-                      ? `输出 ${formatFrequency(referenceSampleRate)} · 模拟目标 ${formatFrequency(selected.targetSampleRateHz)}`
-                      : `目标 ${formatFrequency(selected.targetSampleRateHz)} ≥ 输出 ${formatFrequency(referenceSampleRate)}，PCM 帧率不变`}</small></span>
+                      ? `源 PCM ${sourceSampleRateLabel} · 处理上下文 ${formatFrequency(referenceSampleRate)} · 模拟目标 ${formatFrequency(selected.targetSampleRateHz)}`
+                      : `源 PCM ${sourceSampleRateLabel} · 处理上下文 ${formatFrequency(referenceSampleRate)} · 目标 ${formatFrequency(selected.targetSampleRateHz)}，透明直通`}</small></span>
                   </div>
                   <label className="filter-field resampler-algorithm-field">
                     <span>重采样算法</span>
